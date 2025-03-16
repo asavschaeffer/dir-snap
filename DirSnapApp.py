@@ -71,16 +71,38 @@ class DirSnapApp(tk.Tk):
         self.text_widget = scrolledtext.ScrolledText(self, width=80, height=20)
 
     def select_directory(self):
-        self.directory = filedialog.askdirectory()
-        if self.directory:
-            self.selected_label.config(text=f"Selected: {self.directory}", fg="black", font=("Arial", 10, "bold"))
-            self.dir_status_label.pack_forget()
-            self.format_status_label.pack(pady=5)
-            self.format_frame.pack(pady=5)
-            self.button_frame.pack(pady=5)
-            self.text_widget.pack(pady=5)
-        else:
-            self.selected_label.config(text="Selected: None (pick your main folder)", fg="gray", font=("Arial", 10))
+        directory = filedialog.askdirectory()
+        
+        # If user cancels or selects nothing
+        if not directory:
+            # If they had a directory previously selected, reset to Step 1
+            if self.directory:
+                self.directory = None
+                self.selected_label.config(text="Selected: None (pick your main folder)", fg="gray", font=("Arial", 10))
+                
+                # Hide Step 2 components
+                self.format_status_label.pack_forget()
+                self.format_frame.pack_forget()
+                self.button_frame.pack_forget()
+                self.text_widget.pack_forget()
+                
+                # Show Step 1 components again
+                self.dir_status_label.pack(pady=5)
+                
+                # Clear the text widget
+                self.text_widget.config(state=tk.NORMAL)
+                self.text_widget.delete(1.0, tk.END)
+                self.text_widget.config(state=tk.DISABLED)
+            return
+        
+        # User selected a directory
+        self.directory = directory
+        self.selected_label.config(text=f"Selected: {self.directory}", fg="black", font=("Arial", 10, "bold"))
+        self.dir_status_label.pack_forget()
+        self.format_status_label.pack(pady=5)
+        self.format_frame.pack(pady=5)
+        self.button_frame.pack(pady=5)
+        self.text_widget.pack(pady=5)
 
     def generate_output(self):
         format = self.format_var.get()
@@ -114,26 +136,99 @@ class DirSnapApp(tk.Tk):
         return tree
 
     def _generate_mermaid_tree(self, path):
-        tree = "graph TD\n"
-        root_id = "A"
-        tree += f"{root_id}[{os.path.basename(path)}]\n"
+        """Generate a Mermaid flowchart representing the directory structure with file type icons."""
+        tree = "flowchart LR\n"
+        tree += "    %% Directory tree for " + os.path.basename(path) + "\n"
+        tree += "    classDef folder fill:#f9d094,stroke:#d8a14f,stroke-width:1px;\n"
+        tree += "    classDef file fill:#f2f2f2,stroke:#d4d4d4,stroke-width:1px;\n"
+        tree += "    classDef image fill:#d4f4dd,stroke:#68c387,stroke-width:1px;\n"
+        tree += "    classDef code fill:#d4e7f9,stroke:#4a89dc,stroke-width:1px;\n"
+        tree += "    classDef document fill:#f9d4e8,stroke:#de5c9d,stroke-width:1px;\n"
+        tree += "    classDef archive fill:#e8d4f9,stroke:#9b59b6,stroke-width:1px;\n"
+        
+        root_id = "root"
+        root_name = os.path.basename(path)
+        tree += f"    {root_id}[\"📁 {root_name}\"]\n"
+        tree += "    class " + root_id + " folder;\n"
+        
         node_counter = [1]
         tree += self._generate_mermaid_subtree(path, root_id, node_counter)
         return tree
 
+    def _get_file_icon(self, filename):
+        """Return appropriate emoji based on file extension."""
+        ext = os.path.splitext(filename)[1].lower()
+        
+        # Images
+        if ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.tiff', '.webp']:
+            return "🖼️", "image"
+        
+        # Documents
+        elif ext in ['.doc', '.docx', '.odt', '.rtf', '.pdf', '.txt', '.md', '.csv', '.xlsx', '.xls', '.pptx', '.ppt']:
+            if ext == '.pdf':
+                return "📕", "document"
+            elif ext in ['.xlsx', '.xls', '.csv']:
+                return "📊", "document"
+            elif ext in ['.pptx', '.ppt']:
+                return "📑", "document"
+            elif ext in ['.md', '.txt']:
+                return "📝", "document"
+            else:
+                return "📄", "document"
+        
+        # Code & Scripts
+        elif ext in ['.py', '.js', '.html', '.css', '.java', '.c', '.cpp', '.h', '.php', '.sh', '.bat', '.ps1', '.rb', '.go', '.ts', '.json', '.xml']:
+            if ext == '.py':
+                return "🐍", "code"
+            elif ext == '.js':
+                return "📜", "code"
+            elif ext in ['.html', '.css']:
+                return "🌐", "code"
+            elif ext == '.json' or ext == '.xml':
+                return "🔧", "code"
+            else:
+                return "📜", "code"
+        
+        # Archives
+        elif ext in ['.zip', '.rar', '.tar', '.gz', '.7z']:
+            return "🗜️", "archive"
+        
+        # Audio
+        elif ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a']:
+            return "🔊", "file"
+        
+        # Video
+        elif ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
+            return "🎬", "file"
+        
+        # Executable
+        elif ext in ['.exe', '.app', '.dll', '.so']:
+            return "⚙️", "file"
+        
+        # Default
+        else:
+            return "📄", "file"
+
     def _generate_mermaid_subtree(self, path, parent_id, node_counter):
+        """Generate Mermaid subtree for the given path with file type detection."""
         tree = ''
         for item in sorted(os.listdir(path)):
             item_path = os.path.join(path, item)
-            current_id = f"N{node_counter[0]}"
+            current_id = f"node{node_counter[0]}"
             node_counter[0] += 1
+            
             if os.path.isdir(item_path):
-                tree += f"{current_id}[{item}]\n"
-                tree += f"{parent_id} --> {current_id}\n"
+                # It's a directory
+                tree += f"    {current_id}[\"📁 {item}\"]\n"
+                tree += f"    {parent_id} --> {current_id}\n"
+                tree += "    class " + current_id + " folder;\n"
                 tree += self._generate_mermaid_subtree(item_path, current_id, node_counter)
             else:
-                tree += f"{current_id}[{item}]\n"
-                tree += f"{parent_id} --> {current_id}\n"
+                # It's a file
+                icon, file_class = self._get_file_icon(item)
+                tree += f"    {current_id}[\"{icon} {item}\"]\n"
+                tree += f"    {parent_id} --> {current_id}\n"
+                tree += f"    class {current_id} {file_class};\n"
         return tree
 
     def save_to_downloads(self):
