@@ -1,0 +1,2 @@
+# No external dependencies required for basic functionality
+# tkinter is included in standard Python installations 
