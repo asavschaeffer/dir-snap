@@ -26,24 +26,37 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+DirSnap_Distribution/
 
 # Virtual environments
 venv/
 env/
 ENV/
+.venv/
+.env/
 
 # IDE files
 .idea/
 .vscode/
 *.swp
 *.swo
+.spyderproject
+.spyproject
+.ropeproject
 
 # OS specific files
 .DS_Store
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
+Icon?
+ehthumbs.db
 
 # Temporary files
 *.tmp
 *.bak
 *.log
+*.cache
+.pytest_cache/
+.coverage
+htmlcov/

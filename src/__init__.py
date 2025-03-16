@@ -1,1 +1,1 @@
- 
+# DirSnap package 
