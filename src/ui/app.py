@@ -42,17 +42,33 @@ class DirSnapApp(tk.Tk):
         self.format_status_label = tk.Label(self, text="Step 2: Pick a format and use the buttons", fg="green")
         
         # Format description
-        format_desc = "LLM Output: Optimized for AI context\nHuman Output: Human-readable directory structure\nDiagram Output: Visual representation"
-        self.format_desc_label = tk.Label(self, text=format_desc, fg="gray", justify=tk.LEFT)
+        self.format_desc_labels = {
+            "LLM Output": tk.Label(self, text="LLM Output: Optimized for AI context", fg="gray", justify=tk.LEFT),
+            "Human Output": tk.Label(self, text="Human Output: Human-readable directory structure", fg="gray", justify=tk.LEFT),
+            "Diagram Output": tk.Label(self, text="Diagram Output: Visual representation", fg="gray", justify=tk.LEFT)
+        }
         
         self.format_frame = tk.Frame(self)
         self.format_var = tk.StringVar(self)
         self.format_var.set("Human Output")
-        tk.Label(self.format_frame, text="Output Format:", font=("Arial", 10)).pack(side=tk.TOP, pady=2)
+        self.format_var.trace('w', self._update_format_descriptions)
+        
+        # Update descriptions immediately after setting initial value
+        self._update_format_descriptions()
+        
+        tk.Label(self.format_frame, text="Format:", font=("Arial", 10)).pack(side=tk.TOP, pady=2)
         self.format_menu = tk.OptionMenu(self.format_frame, self.format_var, 
                                        "LLM Output", "Human Output", "Diagram Output")
         self.format_menu.config(font=("Arial", 10), width=15)
         self.format_menu.pack(side=tk.TOP, pady=2)
+        
+        # Configure the menu items to match the button width by padding with spaces
+        menu = self.format_menu['menu']
+        menu.delete(0, 'end')  # Clear existing items
+        for item in ["LLM Output", "Human Output", "Diagram Output"]:
+            # Pad the label with spaces to match the button width
+            padded_label = f"{item:<15}"
+            menu.add_command(label=padded_label, command=lambda x=item: self.format_var.set(x))
         
         # Settings button
         self.settings_button = tk.Button(self.format_frame, text="⚙️", font=("Arial", 12),
@@ -88,6 +104,12 @@ class DirSnapApp(tk.Tk):
             'max_items': 5
         }
 
+    def _update_format_descriptions(self, *args):
+        """Update the format description labels based on the selected format."""
+        selected = self.format_var.get()
+        for format_name, label in self.format_desc_labels.items():
+            label.config(fg="black" if format_name == selected else "gray")
+
     def show_settings(self):
         """Show the settings window."""
         settings_window = SettingsWindow(self)
@@ -107,7 +129,8 @@ class DirSnapApp(tk.Tk):
                 
                 # Hide Step 2 components
                 self.format_status_label.pack_forget()
-                self.format_desc_label.pack_forget()
+                for label in self.format_desc_labels.values():
+                    label.pack_forget()
                 self.format_frame.pack_forget()
                 self.button_frame.pack_forget()
                 self.text_widget.pack_forget()
@@ -126,7 +149,8 @@ class DirSnapApp(tk.Tk):
         self.selected_label.config(text=f"Selected: {self.directory}", fg="black", font=("Arial", 10, "bold"))
         self.dir_status_label.pack_forget()
         self.format_status_label.pack(pady=5)
-        self.format_desc_label.pack(pady=2)
+        for label in self.format_desc_labels.values():
+            label.pack(pady=2)
         self.format_frame.pack(pady=5)
         self.button_frame.pack(pady=5)
         self.text_widget.pack(pady=5)
@@ -214,7 +238,8 @@ class DirSnapApp(tk.Tk):
             self.selected_label.config(text=f"Selected: {self.directory}", fg="black", font=("Arial", 10, "bold"))
             self.dir_status_label.pack_forget()
             self.format_status_label.pack(pady=5)
-            self.format_desc_label.pack(pady=2)
+            for label in self.format_desc_labels.values():
+                label.pack(pady=2)
             self.format_frame.pack(pady=5)
             self.button_frame.pack(pady=5)
             self.text_widget.pack(pady=5) 

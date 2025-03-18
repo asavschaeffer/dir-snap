@@ -49,12 +49,32 @@ class SettingsWindow:
         # Diagram type selection
         ttk.Label(config_frame, text="Diagram Type:").pack(anchor="w")
         diagram_types = ["mindmap", "graph", "flowchart"]
-        ttk.OptionMenu(config_frame, self.diagram_type_var, *diagram_types).pack(fill="x", pady=2)
+        diagram_menu = ttk.OptionMenu(config_frame, self.diagram_type_var, *diagram_types)
+        diagram_menu.config(width=15)  # Set width to match the longest option
+        diagram_menu.pack(fill="x", pady=2)
+        
+        # Configure the menu items to match the button width by padding with spaces
+        diagram_menu_items = diagram_menu['menu']
+        diagram_menu_items.delete(0, 'end')  # Clear existing items
+        for item in diagram_types:
+            # Pad the label with spaces to match the button width
+            padded_label = f"{item:<15}"
+            diagram_menu_items.add_command(label=padded_label, command=lambda x=item: self.diagram_type_var.set(x))
         
         # Diagram orientation (only for graph and flowchart)
         ttk.Label(config_frame, text="Orientation:").pack(anchor="w")
         orientations = ["TD", "LR"]
-        ttk.OptionMenu(config_frame, self.diagram_orientation_var, *orientations).pack(fill="x", pady=2)
+        orientation_menu = ttk.OptionMenu(config_frame, self.diagram_orientation_var, *orientations)
+        orientation_menu.config(width=15)  # Set width to match the longest option
+        orientation_menu.pack(fill="x", pady=2)
+        
+        # Configure the menu items to match the button width by padding with spaces
+        orientation_menu_items = orientation_menu['menu']
+        orientation_menu_items.delete(0, 'end')  # Clear existing items
+        for item in orientations:
+            # Pad the label with spaces to match the button width
+            padded_label = f"{item:<15}"
+            orientation_menu_items.add_command(label=padded_label, command=lambda x=item: self.diagram_orientation_var.set(x))
         
         # Mermaid code block wrapping
         ttk.Checkbutton(config_frame, text="Wrap in ```mermaid code block", 
