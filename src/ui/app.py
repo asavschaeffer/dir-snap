@@ -1,19 +1,15 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 import os
-import json
 import sys
-import getpass
 
 # Add the parent directory to sys.path to make imports work
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.ui.tooltip import ToolTip
-from src.utils.tree_generators import (
-    generate_text_tree,
-    generate_json_tree,
-    generate_mermaid_tree
-)
+from src.ui.settings import SettingsWindow
+from src.generators import LLMGenerator, HumanGenerator, DiagramGenerator
+from src.utils.file_utils import save_to_downloads, copy_to_clipboard, get_file_extension
 
 class DirSnapApp(tk.Tk):
     """
@@ -46,17 +42,22 @@ class DirSnapApp(tk.Tk):
         self.format_status_label = tk.Label(self, text="Step 2: Pick a format and use the buttons", fg="green")
         
         # Format description
-        format_desc = "Token Conservation: Optimized for AI context\nSimple Tree: Human-readable directory structure\nMermaid Diagram: Visual flowchart representation"
+        format_desc = "LLM Output: Optimized for AI context\nHuman Output: Human-readable directory structure\nDiagram Output: Visual representation"
         self.format_desc_label = tk.Label(self, text=format_desc, fg="gray", justify=tk.LEFT)
         
         self.format_frame = tk.Frame(self)
         self.format_var = tk.StringVar(self)
-        self.format_var.set("Simple Tree")
+        self.format_var.set("Human Output")
         tk.Label(self.format_frame, text="Output Format:", font=("Arial", 10)).pack(side=tk.TOP, pady=2)
         self.format_menu = tk.OptionMenu(self.format_frame, self.format_var, 
-                                       "Token Conservation", "Simple Tree", "Mermaid Diagram")
+                                       "LLM Output", "Human Output", "Diagram Output")
         self.format_menu.config(font=("Arial", 10), width=15)
         self.format_menu.pack(side=tk.TOP, pady=2)
+        
+        # Settings button
+        self.settings_button = tk.Button(self.format_frame, text="⚙️", font=("Arial", 12),
+                                       command=self.show_settings)
+        self.settings_button.pack(side=tk.TOP, pady=2)
         
         self.button_frame = tk.Frame(self)
         self.download_button = tk.Button(self.button_frame, text="↓", font=("Arial", 14), 
@@ -72,6 +73,26 @@ class DirSnapApp(tk.Tk):
         self.clipboard_label.pack(side=tk.LEFT, padx=5)
         
         self.text_widget = scrolledtext.ScrolledText(self, width=80, height=20)
+        
+        # Initialize generators
+        self.llm_generator = LLMGenerator()
+        self.human_generator = HumanGenerator()
+        self.diagram_generator = DiagramGenerator()
+        
+        # Initialize settings
+        self.settings = {
+            'mermaid_format': 'mindmap',
+            'mermaid_wrap': True,
+            'auto_copy_path': False,
+            'max_depth': 3,
+            'max_items': 5
+        }
+
+    def show_settings(self):
+        """Show the settings window."""
+        settings_window = SettingsWindow(self)
+        self.wait_window(settings_window.window)
+        self.settings = settings_window.get_settings()
 
     def select_directory(self):
         """Handle directory selection and UI state changes."""
@@ -112,14 +133,24 @@ class DirSnapApp(tk.Tk):
 
     def generate_output(self):
         """Generate output based on the selected format."""
+        if not self.directory:
+            return None
+            
         format = self.format_var.get()
-        if format == "Token Conservation":
-            # Join the list with newlines for display
-            return "\n".join(generate_text_tree(self.directory))
-        elif format == "Simple Tree":
-            return generate_json_tree(self.directory)
-        elif format == "Mermaid Diagram":
-            return generate_mermaid_tree(self.directory)
+        if format == "LLM Output":
+            return self.llm_generator.generate(self.directory)
+        elif format == "Human Output":
+            return self.human_generator.generate(self.directory)
+        elif format == "Diagram Output":
+            output = self.diagram_generator.generate(
+                self.directory,
+                max_depth=self.settings['max_depth'],
+                max_items_per_dir=self.settings['max_items'],
+                diagram_type=self.settings['mermaid_format']
+            )
+            if self.settings['mermaid_wrap']:
+                output = "```mermaid\n" + output + "\n```"
+            return output
 
     def save_to_downloads(self):
         """Save the generated output to the Downloads folder."""
@@ -133,23 +164,23 @@ class DirSnapApp(tk.Tk):
             return
             
         format = self.format_var.get()
-        exts = {
-            "Token Conservation": ".txt",
-            "Simple Tree": ".txt",
-            "Mermaid Diagram": ".md"
-        }
         root_name = os.path.basename(self.directory) or "Untitled"
-        filename = f"{root_name} File Directory Tree{exts[format]}"
-        downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", filename)
+        filename = f"{root_name} File Directory Tree{get_file_extension(format)}"
         
         try:
-            with open(downloads_path, 'w', encoding='utf-8') as f:
-                f.write(output)
+            downloads_path = save_to_downloads(output, filename)
             self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete(1.0, tk.END)
             self.text_widget.insert(tk.END, output)
             self.text_widget.config(state=tk.DISABLED)
-            messagebox.showinfo("Success", f"Saved to Downloads as {filename}")
+            
+            # Auto-copy path if enabled
+            if self.settings['auto_copy_path']:
+                copy_to_clipboard(self, downloads_path)
+                messagebox.showinfo("Success", f"Saved to Downloads as {filename}\nPath copied to clipboard!")
+            else:
+                messagebox.showinfo("Success", f"Saved to Downloads as {filename}")
+                
             self.format_status_label.config(text="Saved! Attach the file to your AI chat", fg="green")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save file: {str(e)}")
@@ -166,9 +197,7 @@ class DirSnapApp(tk.Tk):
             return
         
         try:
-            self.clipboard_clear()
-            self.clipboard_append(output)
-            self.update()
+            copy_to_clipboard(self, output)
             self.text_widget.config(state=tk.NORMAL)
             self.text_widget.delete(1.0, tk.END)
             self.text_widget.insert(tk.END, output)

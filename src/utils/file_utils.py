@@ -1,4 +1,6 @@
 import os
+import json
+from typing import Optional
 
 def get_file_icon(filename):
     """Return appropriate emoji based on file extension."""
@@ -52,4 +54,49 @@ def get_file_icon(filename):
     
     # Default
     else:
-        return "📄", "file" 
+        return "📄", "file"
+
+def save_to_downloads(content: str, filename: str) -> str:
+    """Save content to the Downloads folder.
+    
+    Args:
+        content: The content to save
+        filename: The name of the file
+        
+    Returns:
+        str: The full path where the file was saved
+        
+    Raises:
+        IOError: If the file cannot be saved
+    """
+    downloads_path = os.path.join(os.path.expanduser("~"), "Downloads", filename)
+    with open(downloads_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return downloads_path
+
+def copy_to_clipboard(window, content: str) -> None:
+    """Copy content to the system clipboard.
+    
+    Args:
+        window: The Tkinter window instance
+        content: The content to copy
+    """
+    window.clipboard_clear()
+    window.clipboard_append(content)
+    window.update()
+
+def get_file_extension(format_name: str) -> str:
+    """Get the appropriate file extension for a format.
+    
+    Args:
+        format_name: The name of the format
+        
+    Returns:
+        str: The file extension (including the dot)
+    """
+    extensions = {
+        "LLM Output": ".txt",
+        "Human Output": ".txt",
+        "Diagram Output": ".md"
+    }
+    return extensions.get(format_name, ".txt") 
