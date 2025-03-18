@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+from datetime import datetime
 
 # Add the parent directory to sys.path to make imports work
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -8,28 +9,59 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from src.utils.file_utils import get_file_icon
 
 def generate_text_tree(path, indent=''):
-    """Generate a text-based tree representation of the directory structure."""
-    tree = ''
+    """Generate a minimal text-based tree representation optimized for LLM consumption.
+    Format: type|path
+    Example: d|/root/folder f|/root/file.txt
+    """
+    tree = []
     for item in sorted(os.listdir(path)):
         item_path = os.path.join(path, item)
+        rel_path = os.path.relpath(item_path, os.path.dirname(path))
         if os.path.isdir(item_path):
-            tree += f"{indent}{item}/\n"
-            tree += generate_text_tree(item_path, indent + '  ')
+            tree.append(f"d|{rel_path}")
+            tree.extend(generate_text_tree(item_path, indent + '  '))
         else:
-            tree += f"{indent}{item}\n"
+            tree.append(f"f|{rel_path}")
     return tree
 
 def generate_json_tree(path):
-    """Generate a JSON representation of the directory structure."""
-    tree = {"path": path, "contents": []}
-    for item in sorted(os.listdir(path)):
-        item_path = os.path.join(path, item)
-        if os.path.isdir(item_path):
-            subtree = generate_json_tree(item_path)
-            tree["contents"].append(subtree)
-        else:
-            tree["contents"].append({"name": item})
-    return tree
+    """Generate a human-readable tree representation with emojis and visual elements."""
+    tree = []
+    root_name = os.path.basename(path)
+    tree.append(f"📁 {root_name}")
+    
+    def add_subtree(current_path, prefix="", is_last=True):
+        items = sorted(os.listdir(current_path))
+        for i, item in enumerate(items):
+            item_path = os.path.join(current_path, item)
+            is_last_item = i == len(items) - 1
+            
+            # Create the visual prefix
+            visual_prefix = prefix + ("└── " if is_last_item else "├── ")
+            
+            if os.path.isdir(item_path):
+                # It's a directory
+                icon, _ = get_file_icon(item)
+                tree.append(f"{visual_prefix}{icon} {item}")
+                # Update prefix for next level
+                next_prefix = prefix + ("    " if is_last_item else "│   ")
+                add_subtree(item_path, next_prefix, is_last_item)
+            else:
+                # It's a file
+                icon, _ = get_file_icon(item)
+                tree.append(f"{visual_prefix}{icon} {item}")
+    
+    # Start the tree from the first level of children
+    add_subtree(path)
+    return "\n".join(tree)
+
+def format_size(size_bytes):
+    """Convert size in bytes to human readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
 
 def generate_mermaid_tree(path):
     """Generate a Mermaid flowchart representing the directory structure with file type icons."""
