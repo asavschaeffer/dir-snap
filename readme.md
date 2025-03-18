@@ -44,6 +44,7 @@ Launch DirSnap in one of two ways:
 ## For Developers
 
 ### Project Structure
+```
 easy-dir-context/
 ├── main.py                    # Entry point
 ├── build_exe.py               # Builds executable
@@ -63,7 +64,7 @@ easy-dir-context/
 │       ├── init.py
 │       ├── file_utils.py      # File operations
 │       └── tree_generators.py # Output format generators
-
+```
 
 ### Building the Distribution
 
@@ -84,3 +85,12 @@ easy-dir-context/
 - **Context Menu Absent**: Re-run the installer or `install_context_menu.bat` as admin.
 - **Diagram Too Long**: Adjust depth/items in settings (⚙️).
 - **Errors**: File a GitHub Issue with a screenshot and details.
+
+## TODO
+
+- fix the width differences between dropdown button and dropdown menu items
+- optimize formats for outputs
+   - is there something better than .txt for llm parsing?
+   - the stylized human-parsable tree probably should be .md file
+   - is there a specific file format for mermaid?
+- make it into an addon that can work with Unity scenes
