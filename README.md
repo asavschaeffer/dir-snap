@@ -46,7 +46,7 @@ This is currently a functional Minimum Viable Product (MVP). Core features are w
 
 1.  Clone the repository:
     ```bash
-    git clone <your-repo-url>
+    git clone <https://github.com/asavschaeffer/dir-snap.git>
     cd DirectoryMapper
     ```
 2.  (Optional but recommended) Create and activate a virtual environment:
