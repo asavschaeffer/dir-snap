@@ -79,19 +79,8 @@ This is currently a functional Minimum Viable Product (MVP). Core features are w
 
 ## License
 
-(Optional: Add your license here, e.g., MIT License)
-
-```
-
----
-
-Remember to create a `requirements.txt` file containing just:
-
 ```
 
 pyperclip
 
-```
-
-This should give you a good starting point for your GitHub repository! Let me know when you're ready to tackle the next steps on our list.
 ```
