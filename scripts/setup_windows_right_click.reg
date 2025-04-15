@@ -1,0 +1,1 @@
+setup_windows_right_click.reg: A Windows Registry file that users can double-click to add the necessary keys for the context menu option (will need editing to point to the correct main.py or packaged executable path).

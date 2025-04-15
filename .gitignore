@@ -1,0 +1,1 @@
+.gitignore: Specifies intentionally untracked files that Git should ignore (e.g., __pycache__/, virtual environment folders, OS-specific files like .DS_Store, packaging build artifacts).

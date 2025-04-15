@@ -1,0 +1,1 @@
+setup_linux_action_instructions.md: Similar instructions for common Linux desktop environments (like creating a Nautilus script/action or a Dolphin service menu). Needs to cover different file managers.
