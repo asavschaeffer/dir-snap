@@ -6,6 +6,7 @@ import pyperclip # Dependency: pip install pyperclip
 from pathlib import Path
 import sys
 import os # Needed for os.startfile (optional feature)
+import subprocess
 
 # Use relative import to access logic.py within the same package
 try:
@@ -136,6 +137,15 @@ class DirMapperApp(tk.Tk):
         self.scaffold_status_var = tk.StringVar(value="Status: Ready")
         self.scaffold_status_label = ttk.Label(self.scaffold_frame, textvariable=self.scaffold_status_var, anchor=tk.W)
 
+        # --- Open Folder Button ---
+        self.scaffold_open_folder_button = ttk.Button(
+            self.scaffold_frame,
+            text="Open Output Folder",
+            command=self._open_last_scaffold_folder
+            # state=tk.DISABLED # Start disabled, will be hidden by layout initially
+        )
+        self.last_scaffold_path = None # Variable to store the path
+
     # --- Layout Methods ---
     def _layout_snapshot_widgets(self):
         """Arranges widgets in the Snapshot tab including default ignores label."""
@@ -185,6 +195,7 @@ class DirMapperApp(tk.Tk):
         # Row 1: Map Input Text Area
         self.scaffold_map_input.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         self.scaffold_frame.rowconfigure(1, weight=1) # Allow text area to expand vertically
+        self.scaffold_frame.rowconfigure(1, weight=1)
 
         # Row 2: Configuration Frame (Base Dir, Format)
         self.scaffold_config_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
@@ -200,7 +211,10 @@ class DirMapperApp(tk.Tk):
         self.scaffold_create_button.grid(row=3, column=0, sticky=tk.E, pady=5, padx=5)
 
         # Row 4: Status Bar
+        self.scaffold_frame.rowconfigure(4, weight=0) # Don't let status row expand
         self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=2, padx=5)
+        self.scaffold_open_folder_button.grid(row=4, column=0, sticky=tk.E, pady=2, padx=5) # Place in same cell, stick East
+        self.scaffold_open_folder_button.grid_remove() # Hide it initially
 
     # --- Event Handlers / Commands ---
 
@@ -232,24 +246,43 @@ class DirMapperApp(tk.Tk):
         target_tab_name = 'snapshot' if active_tab_widget == self.snapshot_frame else 'scaffold'
         self._update_status(initial_status, tab=target_tab_name)
 
-    def _update_status(self, message, is_error=False, tab='scaffold'):
-        """Helper to update the status label on the specified tab."""
+    def _update_status(self, message, is_error=False, is_success=False, tab='scaffold'):
+        """Helper to update the status label on the specified tab with color."""
         # Remove "Status: " prefix if already present
-        if message.lower().startswith("status: "):
-            message = message[len("Status: "):]
+        if isinstance(message, str) and message.lower().startswith("status: "):
+             message = message[len("Status: "):]
 
         status_var = self.scaffold_status_var if tab == 'scaffold' else self.snapshot_status_var
         status_label = self.scaffold_status_label if tab == 'scaffold' else self.snapshot_status_label
 
         status_var.set(f"Status: {message}")
-        color = "red" if is_error else "black" # TODO: Use system/theme colors if possible
+
+        # Determine color
+        color = "black" # Default fallback
         try:
-             # This might fail if the window is closing
+            # Try to use system colors first
+            style = ttk.Style()
+            default_color = style.lookup('TLabel', 'foreground')
+            # Note: Standard system error/success colors aren't easily accessible directly
+            # We'll use common explicit colors.
+            if is_error:
+                color = "red"
+            elif is_success:
+                color = "#008000" # Dark Green
+            else:
+                 color = default_color if default_color else "black"
+        except tk.TclError:
+            # Fallback if style system fails
+            if is_error: color = "red"
+            elif is_success: color = "green"
+            else: color = "black"
+
+
+        try:
              status_label.config(foreground=color)
              self.update_idletasks() # Force UI update
         except tk.TclError:
-             pass # Ignore errors if widget doesn't exist anymore
-
+             pass # Ignore errors if widget doesn't exist anymore (e.g., closing window)
 
     def _browse_snapshot_dir(self):
         dir_path = filedialog.askdirectory(mustexist=True, title="Select Source Directory")
@@ -281,9 +314,9 @@ class DirMapperApp(tk.Tk):
             if not map_result.startswith("Error:"):
                 status_msg = "Map generated."
                 if self.snapshot_auto_copy_var.get():
-                     self._copy_snapshot_to_clipboard(show_status=False) # Don't show status again
-                     status_msg = "Map generated and copied to clipboard."
-                self._update_status(status_msg, tab='snapshot')
+                    copied_ok = self._copy_snapshot_to_clipboard(show_status=False)
+                    status_msg = "Map generated and copied to clipboard." if copied_ok else "Map generated (copy failed)."
+                self._update_status(status_msg, is_success=True, tab='snapshot')
             else:
                  self._update_status(map_result, is_error=True, tab='snapshot') # Show error from logic
 
@@ -307,11 +340,14 @@ class DirMapperApp(tk.Tk):
             try:
                 pyperclip.copy(map_text)
                 status_msg = "Map copied to clipboard."
+                is_error = False
+                is_success = True
                 copied = True
             except Exception as e:
                 messagebox.showerror("Clipboard Error", f"Could not copy to clipboard:\n{e}")
                 status_msg = "Failed to copy map to clipboard."
                 is_error = True
+                is_success = False
         elif not map_text:
              messagebox.showwarning("No Content", "Nothing to copy.")
              status_msg = "Copy failed: No map content."
@@ -322,7 +358,7 @@ class DirMapperApp(tk.Tk):
              is_error = True
 
         if show_status:
-             self._update_status(status_msg, is_error=is_error, tab='snapshot')
+             self._update_status(status_msg, is_error=is_error, is_success=is_success, tab='snapshot')
         return copied # Return status if needed
 
 
@@ -354,7 +390,7 @@ class DirMapperApp(tk.Tk):
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(map_text)
-                self._update_status(f"Map saved to {saved_filename}", tab='snapshot')
+                self._update_status(f"Map saved to {saved_filename}", is_success=True, tab='snapshot')
             except Exception as e:
                 messagebox.showerror("File Save Error", f"Could not save file:\n{e}")
                 self._update_status(f"Failed to save map to {saved_filename}", is_error=True, tab='snapshot')
@@ -366,7 +402,7 @@ class DirMapperApp(tk.Tk):
         dir_path = filedialog.askdirectory(mustexist=True, title="Select Base Directory for Scaffolding")
         if dir_path:
             self.scaffold_base_dir_var.set(dir_path)
-            self._update_status(f"Base directory set to '{Path(dir_path).name}'.", tab='scaffold') # Indicate browse success
+            self._update_status(f"Base directory set to '{Path(dir_path).name}'.",is_success=True, tab='scaffold') # Indicate browse success
             self._check_scaffold_readiness() # Check if now ready
         # else: User cancelled dialog
 
@@ -381,7 +417,7 @@ class DirMapperApp(tk.Tk):
         # This prevents overwriting specific error messages from previous steps.
         current_status = self.scaffold_status_var.get()
         if map_ready and base_dir_ready and "ready to create" not in current_status.lower() and "error" not in current_status.lower():
-            self._update_status("Ready to create structure.", tab='scaffold')
+            self._update_status("Ready to create structure.", is_success=True, tab='scaffold')
         # If not ready, we leave the status as it was (e.g., "Loaded map...", "Base directory selected...", or an error)
 
     def _paste_map_input(self):
@@ -393,7 +429,7 @@ class DirMapperApp(tk.Tk):
                  self._update_status("Pasted map from clipboard.", tab='scaffold')
                  self._check_scaffold_readiness()
             else:
-                 self._update_status("Clipboard is empty.", tab='scaffold')
+                 self._update_status("Clipboard is empty.", is_success=True, tab='scaffold')
         except Exception as e:
             # Catch potential pyperclip errors (rare)
             messagebox.showerror("Clipboard Error", f"Could not paste from clipboard:\n{e}")
@@ -420,20 +456,26 @@ class DirMapperApp(tk.Tk):
         )
         if file_path:
              loaded_ok = self._load_map_from_path(Path(file_path))
-             if self._load_map_from_path(Path(file_path)):
-                 self._update_status(f"Loaded map from {Path(file_path).name}", tab='scaffold')
+             if loaded_ok:
+                 self._update_status(f"Loaded map from {Path(file_path).name}", is_success=True, tab='scaffold')
                  self._check_scaffold_readiness()
              else:
                  self._update_status(f"Error loading map file.", is_error=True, tab='scaffold')
         # else: User cancelled dialog
 
-
     def _create_structure(self):
+        # --- Start of Method ---
+        # 1. Reset path variable and hide the button initially
+        self.last_scaffold_path = None
+        self.scaffold_open_folder_button.grid_remove() # Ensure button is hidden
+
+        # --- Get Inputs ---
         map_text = self.scaffold_map_input.get('1.0', tk.END).strip()
-        print("-" * 40)
-        print("DEBUG APP: Raw map_text retrieved from ScrolledText:")
-        print(repr(map_text)) # Use repr() to show hidden chars like \r, \n, \t etc.
-        print("-" * 40)
+        # Debug print for raw text (keep or remove as needed)
+        # print("-" * 40)
+        # print("DEBUG APP: Raw map_text retrieved from ScrolledText:")
+        # print(repr(map_text))
+        # print("-" * 40)
         base_dir = self.scaffold_base_dir_var.get()
         format_hint = self.scaffold_format_var.get() # Get selected format
 
@@ -448,25 +490,42 @@ class DirMapperApp(tk.Tk):
              return
 
         # --- Call Logic ---
-        self._update_status("Creating structure...", tab='scaffold')
+        self._update_status("Creating structure...", tab='scaffold') # Neutral status while working
 
         try:
-             # TODO: Update logic.create_structure_from_map later to accept format_hint
-             # For now, it ignores the hint in MVP
+             # Call the core logic function (pass format_hint later when implemented)
              msg, success = logic.create_structure_from_map(map_text, base_dir) #, format_hint)
-             self._update_status(msg, is_error=not success, tab='scaffold') # Display result from logic
 
-             # Optional: Open explorer on success? (Platform dependent)
-             if success and sys.platform == "win32":
+             # 3. Update status label with result and color
+             self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
+
+             # 4. On Success ONLY - Store path and show button
+             if success:
                  try:
-                      # Attempt to open the PARENT directory containing the new structure
-                      # Get the created root name from the first line of the map
+                      # Determine the full path to the root directory that was created
                       created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-                      full_path = Path(base_dir) / created_root_name
-                      os.startfile(full_path.parent) # Open parent
-                 except Exception as open_e:
-                      print(f"Info: Could not open explorer: {open_e}") # Non-critical error
-             # Add similar logic for macOS ('open /path/to/parent') or Linux ('xdg-open /path/to/parent') if desired
+                      if created_root_name:
+                           full_path = Path(base_dir) / created_root_name
+                           # Check if it actually exists before enabling button/storing path
+                           if full_path.is_dir():
+                               self.last_scaffold_path = full_path # Store the valid path
+                               self.scaffold_open_folder_button.grid() # Show the button
+                               print(f"Debug: Stored scaffold path: {self.last_scaffold_path}") # Optional debug
+                           else:
+                               # Should not happen if logic succeeded, but handle defensively
+                               print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
+                               self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
+                      else:
+                           # If root name couldn't be determined, maybe just enable opening base_dir? Or do nothing.
+                           print("Warning: Could not determine created root folder name from map.")
+                           self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
+
+                 except Exception as e:
+                      # Error during post-success processing (getting path, showing button)
+                      print(f"Warning: Error processing success state: {e}")
+                      # Update status to reflect success but issue enabling button
+                      self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
+                      self.last_scaffold_path = None # Ensure path is cleared
 
         except Exception as e:
              # Catch unexpected errors from the logic layer or here
@@ -474,6 +533,41 @@ class DirMapperApp(tk.Tk):
              self._update_status(error_msg, is_error=True, tab='scaffold')
              messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
 
+
+    def _open_last_scaffold_folder(self):
+        """Opens the last successfully created scaffold output folder."""
+        if not self.last_scaffold_path:
+            self._update_status("No scaffold output folder recorded.", is_error=True, tab='scaffold')
+            return
+
+        if not self.last_scaffold_path.is_dir():
+             self._update_status(f"Output folder not found: {self.last_scaffold_path}", is_error=True, tab='scaffold')
+             return
+
+        path_to_open = str(self.last_scaffold_path)
+        try:
+            print(f"Debug: Attempting to open folder: {path_to_open}") # Debug print
+            if sys.platform == "win32":
+                os.startfile(path_to_open)
+                self._update_status(f"Opened folder: {self.last_scaffold_path.name}", is_success=True, tab='scaffold')
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(['open', path_to_open], check=True)
+                self._update_status(f"Opened folder: {self.last_scaffold_path.name}", is_success=True, tab='scaffold')
+            else: # Linux and other POSIX variants
+                subprocess.run(['xdg-open', path_to_open], check=True)
+                self._update_status(f"Opened folder: {self.last_scaffold_path.name}", is_success=True, tab='scaffold')
+        except FileNotFoundError:
+             # Error if 'open' or 'xdg-open' command doesn't exist
+             messagebox.showerror("Error", f"Could not find command to open folder for platform {sys.platform}.")
+             self._update_status("Error opening folder: command not found.", is_error=True, tab='scaffold')
+        except subprocess.CalledProcessError as e:
+             # Error if the command fails
+              messagebox.showerror("Error", f"Failed to open folder using system command:\n{e}")
+              self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
+        except Exception as e:
+            # Catch-all for other errors like permissions
+            messagebox.showerror("Error", f"Could not open folder:\n{e}")
+            self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
 
 # --- Main execution block for testing the UI directly ---
 if __name__ == '__main__':
