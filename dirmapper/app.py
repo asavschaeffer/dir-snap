@@ -430,6 +430,10 @@ class DirMapperApp(tk.Tk):
 
     def _create_structure(self):
         map_text = self.scaffold_map_input.get('1.0', tk.END).strip()
+        print("-" * 40)
+        print("DEBUG APP: Raw map_text retrieved from ScrolledText:")
+        print(repr(map_text)) # Use repr() to show hidden chars like \r, \n, \t etc.
+        print("-" * 40)
         base_dir = self.scaffold_base_dir_var.get()
         format_hint = self.scaffold_format_var.get() # Get selected format
 
