@@ -15,6 +15,63 @@ except ImportError:
     # Fallback for running app.py directly for testing UI (not recommended for final)
     import logic
 
+# Add this class definition near the top of dirmapper/app.py
+
+class Tooltip:
+    """
+    Creates a tooltip (pop-up) window for a Tkinter widget.
+    """
+    def __init__(self, widget, text, delay=500, wraplength=180):
+        self.widget = widget
+        self.text = text
+        self.delay = delay  # milliseconds to delay showing the tooltip
+        self.wraplength = wraplength # pixels before wrapping text
+        self.widget.bind("<Enter>", self.schedule_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+        self.widget.bind("<ButtonPress>", self.hide_tooltip) # Hide on click too
+        self.tip_window = None
+        self.id = None
+
+    def schedule_tooltip(self, event=None):
+        """Schedules the tooltip to appear after a delay."""
+        self.hide_tooltip() # Hide any existing tooltip immediately
+        # Schedule show_tooltip() to run after self.delay milliseconds
+        self.id = self.widget.after(self.delay, self.show_tooltip)
+
+    def show_tooltip(self, event=None):
+        """Displays the tooltip window."""
+        # Get widget position relative to screen
+        x = y = 0
+        x, y, cx, cy = self.widget.bbox("insert") # Get coordinates of the widget
+        # Calculate position below the widget
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 20
+
+        # Creates a Toplevel window (a pop-up)
+        self.tip_window = tk.Toplevel(self.widget)
+        # Removes window decorations (title bar, etc.)
+        self.tip_window.wm_overrideredirect(True)
+        self.tip_window.wm_geometry(f"+{x}+{y}") # Position near widget
+
+        label = tk.Label(self.tip_window, text=self.text, justify='left',
+                         background="#ffffe0", relief='solid', borderwidth=1, # Light yellow background
+                         wraplength=self.wraplength, padx=4, pady=2)
+        label.pack(ipadx=1)
+
+    def hide_tooltip(self, event=None):
+        """Hides the tooltip window."""
+        # Cancel the scheduled appearance (if it hasn't appeared yet)
+        scheduled_id = self.id
+        self.id = None
+        if scheduled_id:
+            self.widget.after_cancel(scheduled_id)
+
+        # Destroy the tooltip window if it exists
+        tip = self.tip_window
+        self.tip_window = None
+        if tip:
+            tip.destroy()
+
 class DirMapperApp(tk.Tk):
     def __init__(self, initial_path=None, initial_mode='snapshot'):
         super().__init__()
@@ -66,8 +123,6 @@ class DirMapperApp(tk.Tk):
         self.snapshot_ignore_var = tk.StringVar()
         self.snapshot_ignore_entry = ttk.Entry(self.snapshot_frame, textvariable=self.snapshot_ignore_var, width=50)
 
-        # ... inside _create_snapshot_widgets, after creating snapshot_ignore_entry ...
-
         # Label to show default ignores
         # Create the string for the label text - show common examples
         # Get first few defaults, sort them for consistency
@@ -82,8 +137,7 @@ class DirMapperApp(tk.Tk):
             # disabled_color = style.lookup('TLabel', 'foreground', ('disabled',)) # Example
             # foreground=disabled_color
         )
-        # Maybe: Add Tooltip later using a helper library or custom class
-        # self.create_tooltip(self.snapshot_default_ignores_label, "\n".join(sorted(list(logic.DEFAULT_IGNORE_PATTERNS))))
+        
 
         self.snapshot_regenerate_button = ttk.Button(self.snapshot_frame, text="Generate / Regenerate Map", command=self._generate_snapshot)
 
@@ -98,6 +152,14 @@ class DirMapperApp(tk.Tk):
         self.snapshot_copy_button = ttk.Button(self.snapshot_frame, text="Copy to Clipboard", command=self._copy_snapshot_to_clipboard)
         self.snapshot_save_button = ttk.Button(self.snapshot_frame, text="Save Map As...", command=self._save_snapshot_as)
 
+        Tooltip(self.snapshot_browse_button, "Select the root directory to generate a map for.")
+        Tooltip(self.snapshot_ignore_entry, "Enter comma-separated names/patterns to ignore (e.g., .git, *.log, temp/)")
+        Tooltip(self.snapshot_regenerate_button, "Generate/Refresh the directory map based on current settings.")
+        Tooltip(self.snapshot_auto_copy_check, "If checked, automatically copy the map to clipboard upon generation.")
+        Tooltip(self.snapshot_copy_button, "Copy the generated map text to the clipboard.")
+        Tooltip(self.snapshot_save_button, "Save the generated map text to a file.")
+
+
         # Snapshot Status Bar
         self.snapshot_status_var = tk.StringVar(value="Status: Ready")
         self.snapshot_status_label = ttk.Label(self.snapshot_frame, textvariable=self.snapshot_status_var, anchor=tk.W)
@@ -109,6 +171,10 @@ class DirMapperApp(tk.Tk):
         self.scaffold_paste_button = ttk.Button(self.scaffold_input_buttons_frame, text="Paste Map", command=self._paste_map_input)
         self.scaffold_load_button = ttk.Button(self.scaffold_input_buttons_frame, text="Load Map...", command=self._load_map_file)
         self.scaffold_map_input = scrolledtext.ScrolledText(self.scaffold_frame, wrap=tk.WORD, height=15, width=60)
+
+        # --- Tooltips for Input Buttons ---
+        Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
+        Tooltip(self.scaffold_load_button, "Load map text from a file into the input area.")
 
         # Config Row Frame (to group base dir and format selector)
         self.scaffold_config_frame = ttk.Frame(self.scaffold_frame)
@@ -129,10 +195,10 @@ class DirMapperApp(tk.Tk):
         # Set MVP format as default selected for now
         self.scaffold_format_var.set("MVP Format")
 
-
         # Action Button
         self.scaffold_create_button = ttk.Button(self.scaffold_frame, text="Create Structure", command=self._create_structure)
 
+       
         # Status Bar
         self.scaffold_status_var = tk.StringVar(value="Status: Ready")
         self.scaffold_status_label = ttk.Label(self.scaffold_frame, textvariable=self.scaffold_status_var, anchor=tk.W)
@@ -145,6 +211,13 @@ class DirMapperApp(tk.Tk):
             # state=tk.DISABLED # Start disabled, will be hidden by layout initially
         )
         self.last_scaffold_path = None # Variable to store the path
+
+         # --- Add Tooltips for Config/Action ---
+        Tooltip(self.scaffold_browse_base_button, "Select the existing parent directory where the new structure will be created.")
+        Tooltip(self.scaffold_format_combo, "Select the expected format of the input map (Auto-Detect recommended).")
+        Tooltip(self.scaffold_create_button, "Create the directory structure defined in the map input within the selected base directory.")
+        Tooltip(self.scaffold_open_folder_button, "Open the folder created by the last successful scaffold operation.") # Add tooltip for the new button
+
 
     # --- Layout Methods ---
     def _layout_snapshot_widgets(self):
@@ -532,7 +605,6 @@ class DirMapperApp(tk.Tk):
              error_msg = f"Fatal error during creation: {e}"
              self._update_status(error_msg, is_error=True, tab='scaffold')
              messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
-
 
     def _open_last_scaffold_folder(self):
         """Opens the last successfully created scaffold output folder."""
