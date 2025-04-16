@@ -2,6 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import font as tkFont # Import the font submodule with an alias
 import pyperclip # Dependency: pip install pyperclip
 from pathlib import Path
 import sys
@@ -83,6 +84,39 @@ class DirMapperApp(tk.Tk):
         # Set minimum size
         self.minsize(550, 450)
 
+        # --- Configure Custom TTK Style for Clear Button ---
+        style = ttk.Style(self)
+        try:
+            # Attempt to get Entry background color for seamless look
+            entry_bg = style.lookup('TEntry', 'fieldbackground')
+            # Use a slightly dimmer foreground for the 'x'
+            text_color = style.lookup('TLabel', 'foreground') # Get default text color
+            # You might need to experiment with system color names like 'SystemButtonFace', 'SystemWindow' as fallbacks
+            default_font = tkFont.nametofont("TkDefaultFont")
+            print(f"Debug: Found default font: {default_font.actual()}")
+            
+        except tk.TclError:
+            print("Warning: Could not look up theme colors, using fallback.")
+            entry_bg = 'SystemWindow' # Common fallback background
+            text_color = 'black'      # Default text color
+
+        # Modify style configuration in __init__ in dirmapper/app.py
+
+        # Define the custom style - Add borderwidth and relief
+        style.configure('ClearButton.TButton',
+                        foreground='grey',
+                        borderwidth=0,      # <<<--- ADD THIS
+                        relief='flat',      # <<<--- ADD THIS
+                        padding=0           # Keep padding minimal? Or maybe small like 1? Test 0.
+                        # NO background or focuscolor set yet
+                       )
+
+        # Optional: Map hover/active states (only change foreground)
+        style.map('ClearButton.TButton',
+                  foreground=[('active', text_color), ('pressed', text_color)]
+                  # Still no background map
+                  )
+
         # --- Main UI Structure ---
         self.notebook = ttk.Notebook(self)
 
@@ -119,9 +153,21 @@ class DirMapperApp(tk.Tk):
         self.snapshot_dir_var = tk.StringVar()
         self.snapshot_dir_entry = ttk.Entry(self.snapshot_frame, textvariable=self.snapshot_dir_var, width=50)
         self.snapshot_browse_button = ttk.Button(self.snapshot_frame, text="Browse...", command=self._browse_snapshot_dir)
+        self.snapshot_clear_dir_button = ttk.Button(
+            self.snapshot_frame, text="x", width=2, # Use multiplication sign ×
+            command=lambda: self.snapshot_dir_var.set(''),
+            style='ClearButton.TButton' # Apply the custom style
+        )
+        
 
         self.snapshot_ignore_var = tk.StringVar()
         self.snapshot_ignore_entry = ttk.Entry(self.snapshot_frame, textvariable=self.snapshot_ignore_var, width=50)
+        self.snapshot_clear_ignore_button = ttk.Button(
+            self.snapshot_frame, text="x", width=2,
+            command=lambda: self.snapshot_ignore_var.set(''),
+            style='ClearButton.TButton' # Apply the custom style
+        )
+        
 
         # Label to show default ignores
         # Create the string for the label text - show common examples
@@ -153,7 +199,9 @@ class DirMapperApp(tk.Tk):
         self.snapshot_save_button = ttk.Button(self.snapshot_frame, text="Save Map As...", command=self._save_snapshot_as)
 
         Tooltip(self.snapshot_browse_button, "Select the root directory to generate a map for.")
+        Tooltip(self.snapshot_clear_dir_button, "Clear directory path")
         Tooltip(self.snapshot_ignore_entry, "Enter comma-separated names/patterns to ignore (e.g., .git, *.log, temp/)")
+        Tooltip(self.snapshot_clear_ignore_button, "Clear custom ignores")
         Tooltip(self.snapshot_regenerate_button, "Generate/Refresh the directory map based on current settings.")
         Tooltip(self.snapshot_auto_copy_check, "If checked, automatically copy the map to clipboard upon generation.")
         Tooltip(self.snapshot_copy_button, "Copy the generated map text to the clipboard.")
@@ -171,6 +219,7 @@ class DirMapperApp(tk.Tk):
         self.scaffold_paste_button = ttk.Button(self.scaffold_input_buttons_frame, text="Paste Map", command=self._paste_map_input)
         self.scaffold_load_button = ttk.Button(self.scaffold_input_buttons_frame, text="Load Map...", command=self._load_map_file)
         self.scaffold_map_input = scrolledtext.ScrolledText(self.scaffold_frame, wrap=tk.WORD, height=15, width=60)
+        self.scaffold_clear_map_button = ttk.Button(self.scaffold_input_buttons_frame, text="Clear Map", command=lambda: self.scaffold_map_input.delete('1.0', tk.END))
 
         # --- Tooltips for Input Buttons ---
         Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
@@ -183,6 +232,12 @@ class DirMapperApp(tk.Tk):
         self.scaffold_base_dir_var = tk.StringVar()
         self.scaffold_base_dir_entry = ttk.Entry(self.scaffold_config_frame, textvariable=self.scaffold_base_dir_var, width=40)
         self.scaffold_browse_base_button = ttk.Button(self.scaffold_config_frame, text="Browse...", command=self._browse_scaffold_base_dir)
+        self.scaffold_clear_base_dir_button = ttk.Button(
+            self.scaffold_config_frame, text="x", width=2,
+            command=lambda: self.scaffold_base_dir_var.set(''),
+            style='ClearButton.TButton' # Apply the custom style
+        )
+        
 
         self.scaffold_format_label = ttk.Label(self.scaffold_config_frame, text="Input Format:")
         self.scaffold_format_var = tk.StringVar(value="Auto-Detect") # Default for future use
@@ -214,6 +269,7 @@ class DirMapperApp(tk.Tk):
 
          # --- Add Tooltips for Config/Action ---
         Tooltip(self.scaffold_browse_base_button, "Select the existing parent directory where the new structure will be created.")
+        Tooltip(self.scaffold_clear_base_dir_button, "Clear base directory path")
         Tooltip(self.scaffold_format_combo, "Select the expected format of the input map (Auto-Detect recommended).")
         Tooltip(self.scaffold_create_button, "Create the directory structure defined in the map input within the selected base directory.")
         Tooltip(self.scaffold_open_folder_button, "Open the folder created by the last successful scaffold operation.") # Add tooltip for the new button
@@ -221,53 +277,55 @@ class DirMapperApp(tk.Tk):
 
     # --- Layout Methods ---
     def _layout_snapshot_widgets(self):
-        """Arranges widgets in the Snapshot tab including default ignores label."""
-        # Configure column weights
-        self.snapshot_frame.columnconfigure(1, weight=1) # Let column 1 expand (entries)
+        """Arranges widgets - trying clear buttons in same cell."""
+        self.snapshot_frame.columnconfigure(1, weight=1) # Entry fields expand
+        self.snapshot_frame.columnconfigure(2, weight=0) # Browse button fixed size
 
         # Row 0: Source Directory
         self.snapshot_dir_label.grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
         self.snapshot_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=3)
+        # Place button IN SAME CELL as entry, aligned right
+        self.snapshot_clear_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 2)) # padx pushes it slightly from right edge
         self.snapshot_browse_button.grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
 
-        # Row 1: Custom Ignores Entry
+        # Row 1: Ignores
         self.snapshot_ignore_label.grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        self.snapshot_ignore_entry.grid(row=1, column=1, columnspan=2, sticky=(tk.W, tk.E), pady=3) # Span cols 1 and 2
+        self.snapshot_ignore_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3)
+        # Place button IN SAME CELL as entry, aligned right
+        self.snapshot_clear_ignore_button.grid(row=1, column=1, sticky=tk.E, padx=(0, 2))
+        # Column 2 is now free for this row
 
-        # Row 2: Default Ignores Info Label <--- NEW ROW
-        self.snapshot_default_ignores_label.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=7, pady=(0, 5)) # Indent slightly under entry
+        # Row 2: (Placeholder for future Output Format)
 
-        # Row 3: (Placeholder for future Output Format)
+        # Row 3: Controls (Generate Button, Checkbox) - Unchanged
+        self.snapshot_regenerate_button.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        self.snapshot_auto_copy_check.grid(row=3, column=1, sticky=tk.W, padx=15, pady=5)
 
-        # Row 4: Controls (Generate Button, Checkbox) <--- Now Row 4
-        self.snapshot_regenerate_button.grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
-        self.snapshot_auto_copy_check.grid(row=4, column=1, sticky=tk.W, padx=15, pady=5)
+        # Row 4: Action Buttons (Copy, Save) - Unchanged
+        self.snapshot_copy_button.grid(row=4, column=1, sticky=tk.E, padx=5, pady=5)
+        self.snapshot_save_button.grid(row=4, column=2, sticky=tk.W, padx=5, pady=5)
 
-        # Row 5: Action Buttons (Copy, Save) <--- Now Row 5
-        self.snapshot_copy_button.grid(row=5, column=1, sticky=tk.E, padx=5, pady=5)
-        self.snapshot_save_button.grid(row=5, column=2, sticky=tk.W, padx=5, pady=5)
+        # Row 5: Output Text Area - Spans columns 0, 1, 2
+        self.snapshot_map_output.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.snapshot_frame.rowconfigure(5, weight=1) # Text area is row 5
 
-        # Row 6: Output Text Area - Spans all 3 columns <--- Now Row 6
-        self.snapshot_map_output.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        self.snapshot_frame.rowconfigure(6, weight=1) # Allow text area (now row 6) to expand vertically
+        # Row 6: Status Bar - Spans columns 0, 1, 2
+        self.snapshot_status_label.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2, padx=5)
 
-        # Row 7: Status Bar <--- Now Row 7
-        self.snapshot_status_label.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2, padx=5)
+    # Modify _layout_scaffold_widgets in app.py
 
-    
     def _layout_scaffold_widgets(self):
-        """Arranges widgets in the Scaffold tab using grid."""
-        self.scaffold_frame.columnconfigure(0, weight=1) # Allow text area/config frame to expand
+        """Arranges widgets - trying clear button in same cell."""
+        self.scaffold_frame.columnconfigure(0, weight=1)
 
-        # Row 0: Input Buttons
+        # Row 0: Input Buttons (Add Clear Map here)
         self.scaffold_input_buttons_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=2)
-        # Use grid inside this frame for consistency
         self.scaffold_paste_button.grid(row=0, column=0, padx=5)
         self.scaffold_load_button.grid(row=0, column=1, padx=5)
+        self.scaffold_clear_map_button.grid(row=0, column=2, padx=5) # Looks okay here
 
-        # Row 1: Map Input Text Area
+        # Row 1: Map Input Text Area - Unchanged
         self.scaffold_map_input.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        self.scaffold_frame.rowconfigure(1, weight=1) # Allow text area to expand vertically
         self.scaffold_frame.rowconfigure(1, weight=1)
 
         # Row 2: Configuration Frame (Base Dir, Format)
@@ -276,17 +334,19 @@ class DirMapperApp(tk.Tk):
         self.scaffold_config_frame.columnconfigure(1, weight=1) # Let Base Dir Entry expand
         self.scaffold_base_dir_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 2))
         self.scaffold_base_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=2)
-        self.scaffold_browse_base_button.grid(row=0, column=2, sticky=tk.W, padx=(2, 15))
+        # Place clear button IN SAME CELL as entry, aligned right
+        self.scaffold_clear_base_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 6))
+        # Adjust subsequent columns
+        self.scaffold_browse_base_button.grid(row=0, column=2, sticky=tk.W, padx=(5, 15)) # Increased left pad
         self.scaffold_format_label.grid(row=0, column=3, sticky=tk.W, padx=(5, 2))
         self.scaffold_format_combo.grid(row=0, column=4, sticky=tk.W, padx=2)
 
-        # Row 3: Create Button
+        # Row 3: Create Button - Unchanged
         self.scaffold_create_button.grid(row=3, column=0, sticky=tk.E, pady=5, padx=5)
 
-        # Row 4: Status Bar
-        self.scaffold_frame.rowconfigure(4, weight=0) # Don't let status row expand
+        # Row 4: Status Bar AND Open Folder Button - Unchanged
         self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=2, padx=5)
-        self.scaffold_open_folder_button.grid(row=4, column=0, sticky=tk.E, pady=2, padx=5) # Place in same cell, stick East
+        self.scaffold_open_folder_button.grid(row=4, column=0, sticky=tk.E, pady=2, padx=5)
         self.scaffold_open_folder_button.grid_remove() # Hide it initially
 
     # --- Event Handlers / Commands ---

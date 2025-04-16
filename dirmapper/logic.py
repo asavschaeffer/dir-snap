@@ -1,10 +1,9 @@
-# dirmapper/logic.py
-
 import os
 import fnmatch
 import re # For format detection and parsing
 from pathlib import Path
 import shutil
+# import pprint # No longer needed
 
 # --- Default Configuration ---
 DEFAULT_IGNORE_PATTERNS = {
@@ -15,30 +14,58 @@ DEFAULT_IGNORE_PATTERNS = {
 DEFAULT_SNAPSHOT_SPACES = 2
 
 # Characters commonly found in tree prefixes (Unicode, ASCII, spaces, tabs)
-# We will strip these from the left to find the start of the actual name.
 TREE_PREFIX_CHARS_TO_STRIP = "│├└─| L\\_+-`" + " " + "\t"
 
-# --- Snapshot Function (Unchanged from previous working version) ---
+# Regex to strip common list/tree prefixes AFTER leading spaces (for Generic parser)
+PREFIX_STRIP_RE_GENERIC = re.compile(r"^[ *\-\>`]+")
+
+# Regex to detect tree prefixes more reliably after leading whitespace
+TREE_PREFIX_RE = re.compile(r"^\s*([││]|├──|└──)")
+
+# --- Snapshot Function ---
 
 def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
-    """Generates map using DEFAULT_SNAPSHOT_SPACES and trailing '/'"""
+    """
+    Generates an indented text map of a directory structure (MVP format).
+
+    Builds an intermediate tree using os.walk for efficiency and pruning,
+    then generates the map string from the tree for correct indentation.
+    Uses DEFAULT_SNAPSHOT_SPACES for indentation and trailing '/' for directories.
+
+    Args:
+        root_dir_str (str): The path to the root directory to map.
+        custom_ignore_patterns (set, optional): A set of custom patterns to ignore.
+
+    Returns:
+        str: The formatted directory map string, or an error message.
+    """
     root_dir = Path(root_dir_str).resolve()
     if not root_dir.is_dir():
         return f"Error: Path is not a valid directory: {root_dir_str}"
+
     ignore_set = DEFAULT_IGNORE_PATTERNS.copy()
-    if custom_ignore_patterns: ignore_set.update(custom_ignore_patterns)
+    if custom_ignore_patterns:
+        ignore_set.update(custom_ignore_patterns)
+
     try:
+        # Build Intermediate Tree using os.walk
         tree = {'name': root_dir.name, 'is_dir': True, 'children': [], 'path': root_dir}
-        node_map = {root_dir: tree}
+        node_map = {root_dir: tree} # Map paths to tree nodes
+
         for root, dirs, files in os.walk(str(root_dir), topdown=True, onerror=None):
             current_path = Path(root).resolve()
             parent_node = node_map.get(current_path)
+
             if parent_node is None:
-                dirs[:] = []
+                dirs[:] = [] # Don't descend further if parent node wasn't tracked
                 continue
+
+            # Pruning
             dirs[:] = [d for d in dirs if not any(fnmatch.fnmatch(d, pattern) for pattern in ignore_set)]
             files = sorted([f for f in files if not any(fnmatch.fnmatch(f, pattern) for pattern in ignore_set)])
             dirs.sort()
+
+            # Add children to tree
             for d_name in dirs:
                 dir_path = current_path / d_name
                 child_node = {'name': d_name, 'is_dir': True, 'children': [], 'path': dir_path}
@@ -47,6 +74,8 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
             for f_name in files:
                  child_node = {'name': f_name, 'is_dir': False, 'path': current_path / f_name}
                  parent_node['children'].append(child_node)
+
+        # Generate map string from the completed tree
         map_lines = []
         def build_map_lines_from_tree(node, level):
             indent = " " * (level * DEFAULT_SNAPSHOT_SPACES)
@@ -56,10 +85,16 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
                  sorted_children = sorted(node.get('children', []), key=lambda x: (not x['is_dir'], x['name'].lower()))
                  for child in sorted_children:
                      build_map_lines_from_tree(child, level + 1)
+
         build_map_lines_from_tree(tree, 0)
         return "\n".join(map_lines)
+
     except Exception as e:
-        return f"Error during directory processing near {current_path if 'current_path' in locals() else root_dir}: {e}"
+        # Log unexpected errors during snapshotting
+        print(f"ERROR: Exception during directory snapshot near {current_path if 'current_path' in locals() else root_dir}: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Error during directory processing: {e}"
 
 
 # ============================================================
@@ -75,26 +110,33 @@ def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect")
     """
     parsed_items = None
     error_msg = None
-    print(f"Debug: Starting scaffold with format_hint='{format_hint}'") # Keep this high-level debug
+    # print(f"Debug: Starting scaffold with format_hint='{format_hint}'") # Optional high-level debug
     try:
         parsed_items = parse_map(map_text, format_hint)
         if parsed_items is None or not parsed_items:
              error_msg = "Failed to parse map text (empty map or format error?). Check console warnings."
     except Exception as parse_e:
         error_msg = f"Error during map parsing: {parse_e}"
-        # import traceback # Keep commented out for future debugging if needed
-        # traceback.print_exc()
+        print(f"ERROR: Exception during map parsing: {parse_e}")
+        import traceback
+        traceback.print_exc()
+
 
     if error_msg:
          return error_msg, False
 
-    # Call the structure creation function (which no longer prints verbosely)
+    # Call the structure creation function
     try:
-        # REMOVED pprint call here
+        # print("DEBUG: Parsed items list passed to creator:") # Optional high-level debug
+        # import pprint # Only needed if uncommenting below
+        # pprint.pprint(parsed_items)
         return create_structure_from_parsed(parsed_items, base_dir_str)
     except Exception as create_e:
+        # Log unexpected errors during creation
+        print(f"ERROR: Exception during structure creation: {create_e}")
+        import traceback
+        traceback.print_exc()
         return f"Fatal error during structure creation: {create_e}", False
-
 
 # --- Parsing Orchestrator ---
 
@@ -104,10 +146,11 @@ def parse_map(map_text, format_hint):
     Returns parsed items list or None on failure.
     """
     actual_format = format_hint
-    if format_hint == "Auto-Detect" or format_hint == "MVP Format":
+    if format_hint == "Auto-Detect" or format_hint == "MVP Format": # Treat MVP as needing detection too
         actual_format = _detect_format(map_text)
-        print(f"Debug: Auto-detected format as: '{actual_format}'")
+        print(f"Info: Auto-detected format as: '{actual_format}'") # Keep this info message
 
+    # Call appropriate parser based on detected/selected format
     if actual_format == "Spaces (2)":
         return _parse_indent_based(map_text, spaces_per_level=2)
     elif actual_format == "Spaces (4)":
@@ -117,15 +160,13 @@ def parse_map(map_text, format_hint):
     elif actual_format == "Tree":
         return _parse_tree_format(map_text)
     elif actual_format == "Generic":
-        print("Info: Using generic indentation parser as fallback.")
+        print("Info: Using generic indentation parser as fallback.") # Keep this info message
         return _parse_generic_indent(map_text)
     else: # Should not happen if hint comes from Combobox
         print(f"Warning: Unknown format hint '{actual_format}', attempting generic parse.")
         return _parse_generic_indent(map_text)
 
 # --- Format Detection Helper ---
-# Regex to detect tree prefixes more reliably after leading whitespace
-TREE_PREFIX_RE = re.compile(r"^\s*([││]|├──|└──)") # Matches start, spaces, then a tree char
 
 def _detect_format(map_text, sample_lines=20):
     """
@@ -133,75 +174,60 @@ def _detect_format(map_text, sample_lines=20):
     """
     lines = map_text.strip().splitlines()
     non_empty_lines = [line for line in lines if line.strip()][:sample_lines]
-    if not non_empty_lines: return "Generic" # Treat empty as generic
+    if not non_empty_lines: return "Generic"
 
     # 1. Check for Tree Prefixes
-    if any(TREE_PREFIX_RE.match(line) for line in non_empty_lines[1:]): # Check from second line
-        print("Debug: Detected tree characters.")
+    if any(TREE_PREFIX_RE.match(line) for line in non_empty_lines[1:]):
+        # print("Debug: Detected tree characters.") # Optional debug
         return "Tree"
 
-    # 2. Check for Tabs (on indented lines)
+    # 2. Check for Tabs
     indented_lines = [line for line in non_empty_lines if line and not line.isspace() and line[0] in ('\t', ' ')]
     if any(line.startswith('\t') for line in indented_lines):
-        print("Debug: Detected leading tabs.")
+        # print("Debug: Detected leading tabs.") # Optional debug
         return "Tabs"
 
-    # 3. Check for Spaces - analyze indent differences on non-blank, indented lines
+    # 3. Check for Spaces
     leading_spaces = [len(line) - len(line.lstrip(' ')) for line in indented_lines if line.startswith(' ')]
-    space_indents = sorted(list(set(sp for sp in leading_spaces if sp > 0))) # Unique positive indents
+    space_indents = sorted(list(set(sp for sp in leading_spaces if sp > 0)))
 
     if not space_indents:
-        # No indented lines found, or only root item present. Treat as simple case.
-        # Could be space-based if there are spaces but no *increase* in indent.
-        # Or generic if no spaces/tabs/tree at all.
         if any(line.startswith(' ') for line in non_empty_lines):
-             # Default to most common space indent if some spaces exist but structure is flat/unclear
-             print("Debug: Detected spaces but unclear indent level, assuming Spaces (2).")
+             # print("Debug: Detected spaces but unclear indent level, assuming Spaces (2).") # Optional debug
              return "Spaces (2)"
         else:
-             print("Debug: No clear indentation detected.")
-             return "Generic" # No indentation found
+             # print("Debug: No clear indentation detected.") # Optional debug
+             return "Generic"
 
-    # Calculate differences between consecutive unique indent levels
+    # Analyze differences
     indent_diffs = {space_indents[i] - space_indents[i-1] for i in range(1, len(space_indents))}
-
-    # Check for consistent increments (usually 2 or 4)
-    if len(indent_diffs) == 1: # Only one increment value found
+    if len(indent_diffs) == 1:
          diff = indent_diffs.pop()
-         # Check if base indent is also a multiple of diff
          if space_indents[0] % diff == 0:
              if diff == 4:
-                 print("Debug: Detected consistent space indentation (multiples of 4).")
+                 # print("Debug: Detected consistent space indentation (multiples of 4).") # Optional debug
                  return "Spaces (4)"
              elif diff == 2:
-                 print("Debug: Detected consistent space indentation (multiples of 2).")
+                 # print("Debug: Detected consistent space indentation (multiples of 2).") # Optional debug
                  return "Spaces (2)"
-             else: # Other consistent increment? Treat as generic for now.
-                 print(f"Debug: Detected consistent space indentation (multiples of {diff}), using Generic.")
+             else:
+                 # print(f"Debug: Detected consistent space indentation (multiples of {diff}), using Generic.") # Optional debug
                  return "Generic"
 
-    # If multiple differences or base indent doesn't match, assume generic/mixed
-    print("Debug: Inconsistent space indentation increments detected.")
+    # print("Debug: Inconsistent space indentation increments detected.") # Optional debug
     return "Generic"
 
 # --- Specific Parser Implementations ---
-# Replace the existing _parse_indent_based function in dirmapper/logic.py
-# with this version which includes debugging prints:
 
 def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False):
     """
-    Parses map text using consistent space or tab indentation.
-    Relies on trailing '/' for directories. Returns parsed items list or None.
-    Includes debugging prints for indentation checking.
+    Parses map text using consistent space or tab indentation. (Cleaned)
     """
     if not (spaces_per_level or use_tabs):
         print("Error (_parse_indent_based): Specify spaces_per_level or use_tabs.")
         return None
-
     lines = map_text.strip().splitlines()
-    if not lines:
-        print("Warning (_parse_indent_based): Input map text is empty.")
-        return None
+    if not lines: return None
 
     parsed_items = []
     indent_char = '\t' if use_tabs else ' '
@@ -210,204 +236,165 @@ def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False):
         print("Error (_parse_indent_based): Indent unit must be positive.")
         return None
 
-    print(f"DEBUG PARSER: Using IndentChar='{repr(indent_char)}', IndentUnit={indent_unit}") # Show config
+    # print(f"DEBUG PARSER: Using IndentChar='{repr(indent_char)}', IndentUnit={indent_unit}") # Removed
 
     for line_num, line in enumerate(lines):
-        print("-" * 10) # Separator for lines
-        print(f"DEBUG PARSER: Processing Line {line_num+1}: '{line}'")
+        # print("-" * 10) # Removed
+        # print(f"DEBUG PARSER: Processing Line {line_num+1}: '{line}'") # Removed
+        if not line.strip(): continue
 
-        if not line.strip():
-            print("DEBUG PARSER: Skipping blank line.")
-            continue # Skip blank lines
-
-        # Calculate leading characters
         leading_chars_count = len(line) - len(line.lstrip(indent_char))
-        print(f"DEBUG PARSER: Leading Chars Count ({repr(indent_char)}): {leading_chars_count}")
-
-        item_name_part = line.strip() # Get name after all leading whitespace/tabs
+        # print(f"DEBUG PARSER: Leading Chars Count ({repr(indent_char)}): {leading_chars_count}") # Removed
+        item_name_part = line.strip()
 
         # Validate indentation
         if leading_chars_count % indent_unit != 0:
-            print(f"DEBUG PARSER: Indent check FAILED: {leading_chars_count} % {indent_unit} != 0")
-            # Allow level 0 (no indent)
-            if leading_chars_count == 0 : # Removed 'and line_num == 0' check, level 0 is always valid indent=0
+            # print(f"DEBUG PARSER: Indent check FAILED...") # Removed
+            if leading_chars_count == 0:
                  level = 0
-                 print(f"DEBUG PARSER: Allowed level 0 (no indent).")
+                 # print(f"DEBUG PARSER: Allowed level 0...") # Removed
             else:
                 print(f"Warning (_parse_indent_based): Skipping line {line_num+1} due to inconsistent indentation (not multiple of {indent_unit}). Line: '{line}'")
-                continue # Skip this line completely
+                continue
         else:
             level = leading_chars_count // indent_unit
-            print(f"DEBUG PARSER: Indent OK. Calculated Level={level}")
+            # print(f"DEBUG PARSER: Indent OK. Calculated Level={level}") # Removed
 
         is_directory = item_name_part.endswith('/')
         item_name = item_name_part.rstrip('/') if is_directory else item_name_part
 
         if not item_name:
-            print(f"DEBUG PARSER: Skipping line {line_num+1} because item name is empty after stripping.")
-            continue # Skip if stripping leaves nothing
+            # print(f"DEBUG PARSER: Skipping line {line_num+1} because item name is empty...") # Removed
+            continue
 
-        print(f"DEBUG PARSER: Appending: (Level={level}, Name='{item_name}', IsDir={is_directory})")
+        # print(f"DEBUG PARSER: Appending: (Level={level}, Name='{item_name}', IsDir={is_directory})") # Removed
         parsed_items.append((level, item_name, is_directory))
 
-    # --- Post-loop checks ---
     if not parsed_items:
         print("Warning (_parse_indent_based): No parseable items found after processing all lines.")
-        return None # Return None if nothing was parsed
+        return None
 
-    # Basic validation: First item should usually be level 0
     if parsed_items[0][0] != 0:
          print(f"Warning (_parse_indent_based): Parsed map does not seem to start at level 0 (first item level is {parsed_items[0][0]}).")
-         # Allow this for now, structure creation handles level consistency.
 
-    print("DEBUG PARSER: Parsing finished.")
+    # print("DEBUG PARSER: Parsing finished.") # Removed
     return parsed_items
+
 
 def _parse_tree_format(map_text):
     """
-    Parses tree-style formats (like tree command output, ASCII variants).
-    Determines level based on effective indent after stripping prefixes.
-    Relies on trailing '/' for directories. Returns parsed items list or None.
+    Parses tree-style formats (like tree command output, ASCII variants). (Cleaned)
     """
     lines = map_text.strip().splitlines()
     if not lines: return None
     parsed_items = []
-
-    # --- Dynamic Level Mapping ---
-    indent_map = {} # Maps indent_width -> level
+    indent_map = {}
     next_level_to_assign = 0
     last_level_processed = -1
 
     for line_num, line in enumerate(lines):
-        original_line = line # For logging/errors
-        line = line.rstrip() # Strip trailing whitespace only
-        if not line.strip(): continue # Skip blank lines
+        original_line = line
+        line = line.rstrip()
+        if not line.strip(): continue
 
-        # --- Find where the actual name starts ---
-        # Strip all known prefix characters from the left
         item_name_part = line.lstrip(TREE_PREFIX_CHARS_TO_STRIP)
-        # Calculate the effective indent width (column where name starts)
-        indent_width = len(line) - len(line.lstrip()) # Overall indent works well here
+        indent_width = len(line) - len(line.lstrip())
 
-        # --- Determine Level Dynamically ---
-        current_level = -1 # Initialize level for this line
+        current_level = -1
         if indent_width not in indent_map:
-            # First time seeing this indent width
-            if indent_width == 0 : # Root level must be 0
+            if indent_width == 0 :
                 current_level = 0
                 indent_map[0] = 0
                 if next_level_to_assign == 0: next_level_to_assign = 1
-            # Check if it logically follows the previous level for assignment
-            elif indent_width > max(indent_map.keys() if indent_map else [-1]): # Deeper than any known indent
+            elif len(indent_map) == 0 and indent_width > 0:
+                current_level = 1
+                indent_map[indent_width] = 1
+                indent_map[0] = 0
+                next_level_to_assign = 2
+            elif indent_width > max(indent_map.keys() if indent_map else [-1]):
                 current_level = next_level_to_assign
                 indent_map[indent_width] = current_level
                 next_level_to_assign += 1
             else:
-                # Found an existing indent width out of sequence? Indicates messy map.
-                # Try to find closest existing level? Or skip? Let's skip for now.
                 print(f"Warning (_parse_tree_format): Skipping line {line_num+1} due to potentially inconsistent/out-of-order indentation (width {indent_width}). Line: '{original_line}'")
                 continue
         else:
-            # Known indent width
             current_level = indent_map[indent_width]
 
-        # --- Level Consistency Check ---
-        # Allow same level, one level deeper, or any number of levels shallower
         if current_level > last_level_processed + 1 and line_num > 0:
              print(f"Warning (_parse_tree_format): Skipping line {line_num+1} due to unexpected jump > 1 in indentation level. Line: '{original_line}'")
              continue
 
-        # --- Get Name and Type ---
-        item_name_stripped = item_name_part.strip() # Should already be stripped, but be safe
+        item_name_stripped = item_name_part.strip()
         is_directory = item_name_stripped.endswith('/')
         item_name = item_name_stripped.rstrip('/') if is_directory else item_name_stripped
 
-        if not item_name: # Skip if only prefixes remained
+        if not item_name:
             print(f"Warning (_parse_tree_format): Skipping line {line_num+1} as no item name found after stripping prefixes. Line: '{original_line}'")
             continue
 
-        # Append successfully parsed item
         parsed_items.append((current_level, item_name, is_directory))
-        last_level_processed = current_level # Update for next line validation
+        last_level_processed = current_level
 
-    # --- Post-loop checks ---
     if not parsed_items:
         print("Warning (_parse_tree_format): No parseable items found.")
         return None
 
-    # Don't warn about level 0 start, allow maps that are fragments
-    # if parsed_items[0][0] != 0: print("Warning (_parse_tree_format): Map does not seem to start at level 0.")
-
-    print("DEBUG PARSER: Tree parsing finished.")
+    # print("DEBUG PARSER: Tree parsing finished.") # Removed
     return parsed_items
 
 
 def _parse_generic_indent(map_text):
     """
-    Parses based on generic indentation width (fallback). Uses dynamic level mapping.
-    Attempts to strip common list/tree prefixes. Relies on trailing '/' for directories.
-    Returns parsed items list or None.
+    Parses based on generic indentation width (fallback). Uses dynamic level mapping. (Cleaned)
     """
     lines = map_text.strip().splitlines()
     if not lines: return None
     parsed_items = []
-
-    # --- Dynamic Level Mapping ---
-    indent_map = {} # Maps indent_width -> level
+    indent_map = {}
     next_level_to_assign = 0
     last_level_processed = -1
 
-    # Regex to strip common list/tree prefixes AFTER leading spaces
-    # Allows *, -, space, |, `, └, ├, T, t, > etc.
-    # Make the stripping less aggressive than Tree parser perhaps? Focus on list markers.
-    PREFIX_STRIP_RE_GENERIC = re.compile(r"^[ *\-\>`]+") # Common list/basic prefixes
-
     for line_num, line in enumerate(lines):
-        original_line = line # For logging/errors
+        original_line = line
         line = line.rstrip()
-        if not line.strip(): continue # Skip blank lines
+        if not line.strip(): continue
 
-        # --- Find where the actual name starts ---
         leading_spaces = len(line) - len(line.lstrip(' '))
-        # Try stripping common list/basic prefixes AFTER the space indent
         item_name_part = PREFIX_STRIP_RE_GENERIC.sub("", line.lstrip(' ')).strip()
-        # Use leading_spaces as the indent_width key
         indent_width = leading_spaces
 
-        # --- Determine Level Dynamically (Same logic as tree parser) ---
         current_level = -1
         if indent_width not in indent_map:
-            if indent_width == 0 : # Root level
+            if indent_width == 0:
                 current_level = 0
                 indent_map[0] = 0
                 if next_level_to_assign == 0: next_level_to_assign = 1
-            elif len(indent_map) == 0 and indent_width > 0: # First indented
+            elif len(indent_map) == 0 and indent_width > 0:
                 current_level = 1
                 indent_map[indent_width] = 1
-                indent_map[0] = 0 # Assume level 0 exists if not explicitly first
+                indent_map[0] = 0
                 next_level_to_assign = 2
-            elif indent_width > max(indent_map.keys() if indent_map else [-1]): # Deeper
+            elif indent_width > max(indent_map.keys() if indent_map else [-1]):
                 current_level = next_level_to_assign
                 indent_map[indent_width] = current_level
                 next_level_to_assign += 1
-            else: # Inconsistent indent width found
-                print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to potentially inconsistent/out-of-order indentation (width {indent_width}). Line: '{original_line}'")
+            else:
+                print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to potentially inconsistent/out-of-order indentation. Line: '{original_line}'")
                 continue
-        else: # Known indent width
+        else:
             current_level = indent_map[indent_width]
 
-        # --- Level Consistency Check ---
         if current_level > last_level_processed + 1 and line_num > 0:
-             print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to unexpected jump > 1 in indentation level. Line: '{original_line}'")
+             print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to unexpected jump in indentation level. Line: '{original_line}'")
              continue
 
-        # --- Get Name and Type ---
         is_directory = item_name_part.endswith('/')
         item_name = item_name_part.rstrip('/') if is_directory else item_name_part
 
-        if not item_name: # Skip if only prefixes remained
-            print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} as no item name found after stripping prefixes. Line: '{original_line}'")
-            continue
+        if not item_name:
+             print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} as no item name found after stripping prefixes. Line: '{original_line}'")
+             continue
 
         parsed_items.append((current_level, item_name, is_directory))
         last_level_processed = current_level
@@ -416,15 +403,17 @@ def _parse_generic_indent(map_text):
         print("Warning (_parse_generic_indent): No parseable items found.")
         return None
 
-    print("DEBUG PARSER: Generic parsing finished.")
+    if parsed_items[0][0] != 0:
+        print("Warning (_parse_generic_indent): Parsed map does not seem to start at level 0.")
+
+    # print("DEBUG PARSER: Generic parsing finished.") # Removed
     return parsed_items
 
 
-# --- Structure Creation Function  ---
+# --- Structure Creation Function ---
 def create_structure_from_parsed(parsed_items, base_dir_str):
     """
-    Creates directory structure from parsed items list.
-    Includes debug print for root item's is_directory check.
+    Creates directory structure from parsed items list. (Cleaned Version)
     """
     base_dir = Path(base_dir_str).resolve()
     if not base_dir.is_dir(): return f"Error: Base directory '{base_dir_str}' is not valid.", False
@@ -435,55 +424,65 @@ def create_structure_from_parsed(parsed_items, base_dir_str):
 
     try:
         for i, (current_level, item_name, is_directory) in enumerate(parsed_items):
-             # Root Item Handling
-             if i == 0:
-                 print(f"DEBUG CREATE: Checking Root Item '{item_name}'. Is Directory = {is_directory}") # <<<--- ADDED THIS LINE
-                 created_root_name = item_name
-                 if not is_directory: # Check the value passed in
-                      raise ValueError("Map must start with a directory.")
-             # Normal Item Handling
-             else:
-                 # Adjust stack depth
-                 target_stack_len = current_level + 1
-                 while len(path_stack) > target_stack_len:
-                     path_stack.pop()
+            # Adjust stack depth
+            target_stack_len = current_level + 1
+            while len(path_stack) > target_stack_len:
+                path_stack.pop()
 
-                 # Check consistency
-                 if len(path_stack) != target_stack_len:
-                     raise ValueError(f"STACK ERROR! Cannot determine parent directory for item '{item_name}' at level {current_level}. Expected stack len {target_stack_len}, got {len(path_stack)}.")
+            # Check consistency
+            if len(path_stack) != target_stack_len:
+                # Provide more context in error
+                parent_level = len(path_stack) - 1
+                raise ValueError(f"Structure Error for item '{item_name}' at level {current_level}. Cannot determine parent at level {parent_level}. Check map indentation consistency.")
 
-             # Get parent and current path (this needs to happen for root too, AFTER validation)
-             current_parent_path = path_stack[-1]
-             current_path = current_parent_path / item_name
+            # Get parent and current path
+            current_parent_path = path_stack[-1]
+            # Basic sanitization for filename
+            safe_item_name = re.sub(r'[<>:"/\\|?*]', '_', item_name)
+            # Prevent completely empty names after sanitization
+            if not safe_item_name:
+                 safe_item_name = "_sanitized_empty_name_"
+                 print(f"Warning: Item '{item_name}' resulted in empty name after sanitization, using '{safe_item_name}'.")
 
-             # Create item
-             if is_directory:
-                 current_path.mkdir(parents=True, exist_ok=True)
-                 # Add this dir to stack
-                 path_stack.append(current_path)
-             else: # Is file
-                 current_path.parent.mkdir(parents=True, exist_ok=True)
-                 current_path.touch(exist_ok=True)
+            current_path = current_parent_path / safe_item_name
+
+            # Store root name
+            if i == 0:
+                 created_root_name = safe_item_name # Use sanitized name
+                 if not is_directory: raise ValueError("Map must start with a directory.")
+
+            # Create item
+            if is_directory:
+                current_path.mkdir(parents=True, exist_ok=True)
+                path_stack.append(current_path)
+            else: # Is file
+                current_path.parent.mkdir(parents=True, exist_ok=True)
+                current_path.touch(exist_ok=True)
 
     except ValueError as ve:
+        # Return specific error from validation/stack logic
         return f"Error processing structure: {ve}", False
     except Exception as e:
+        # Log unexpected errors if needed, but return user-friendly message
         print(f"ERROR in create_structure_from_parsed: Unhandled Exception: {e}")
-        # import traceback
-        # traceback.print_exc()
-        return f"Error creating structure for item '{item_name}': {e}", False
+        import traceback
+        traceback.print_exc()
+        failed_item = item_name if 'item_name' in locals() else 'unknown'
+        return f"Error creating structure for item '{failed_item}': {e}", False
 
     # Success
     return f"Structure for '{created_root_name}' successfully created in '{base_dir}'", True
 
+
 # --- Example Usage / Test Harness ---
+# (Keep the test harness as it was in the last version - it's useful for testing)
 if __name__ == '__main__':
     # Ensure necessary imports for this block are present if run directly
     from pathlib import Path
     import shutil
-    # Note: If run as 'python -m dirmapper.logic', functions are already defined.
+    # import pprint # Keep commented out unless needed
 
-    print("--- Testing Directory Mapper Logic (v7 - Harness Fix) ---")
+    print("--- Testing Directory Mapper Logic (v7 - Cleaned Parsers) ---")
 
     # --- Setup Test Environment ---
     test_root = Path("./_mapper_test_env")
@@ -511,19 +510,36 @@ if __name__ == '__main__':
     scaffold_base = test_root / "scaffold_output"
     scaffold_base.mkdir() # Base for all scaffold tests
 
+    # Helper function for running scaffold tests
+    def run_scaffold_test(test_num, hint, map_text, base_path_suffix):
+        print(f"\n{test_num}. Testing Scaffold (hint='{hint}')...")
+        test_dir = scaffold_base / base_path_suffix
+        test_dir.mkdir(parents=True, exist_ok=True) # Ensure target base exists
+        msg, success = create_structure_from_map(map_text, str(test_dir), format_hint=hint)
+        print(f"Result: {success} - {msg}")
+        # Basic verification: Check if the root item from map exists inside test_dir
+        if success:
+            try:
+                first_line = map_text.strip().splitlines()[0].strip()
+                root_name = first_line.rstrip('/')
+                # Sanitize root name same way as creation logic
+                safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', root_name)
+                if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
+
+                created_path = test_dir / safe_root_name
+                if created_path.exists():
+                     print(f"Verification: Item '{safe_root_name}' created successfully in {test_dir.name}.")
+                else:
+                     print(f"Verification WARNING: Success reported, but root item '{safe_root_name}' not found in {test_dir.name}.")
+            except Exception as e:
+                print(f"Verification ERROR: Could not verify result - {e}")
+        return success
+
     # Test with explicit hint matching snapshot output
-    print("\n3. Testing Scaffold (hint='Spaces (2)')...")
-    test_dir_s2_explicit = scaffold_base / "s2_explicit"
-    test_dir_s2_explicit.mkdir(parents=True, exist_ok=True) # <<<--- ADDED THIS LINE
-    msg_s2, success_s2 = create_structure_from_map(snapshot_output, str(test_dir_s2_explicit), format_hint="Spaces (2)")
-    print(f"Result: {success_s2} - {msg_s2}")
+    run_scaffold_test(3, "Spaces (2)", snapshot_output, "s2_explicit")
 
     # Test with Auto-Detect (should detect Spaces (2))
-    print("\n4. Testing Scaffold (hint='Auto-Detect' on Spaces map)...")
-    test_dir_s2_auto = scaffold_base / "s2_auto"
-    test_dir_s2_auto.mkdir(parents=True, exist_ok=True) # <<<--- Ensure this is present too
-    msg_auto_s2, success_auto_s2 = create_structure_from_map(snapshot_output, str(test_dir_s2_auto), format_hint="Auto-Detect")
-    print(f"Result: {success_auto_s2} - {msg_auto_s2}")
+    run_scaffold_test(4, "Auto-Detect", snapshot_output, "s2_auto")
 
     # --- Test other formats (using sample strings) ---
     map_spaces_4 = """
@@ -534,11 +550,7 @@ MyProject4/
         main.py
     README.md
 """
-    print("\n5. Testing Scaffold (hint='Spaces (4)')...")
-    test_dir_s4 = scaffold_base / "s4"
-    test_dir_s4.mkdir(parents=True, exist_ok=True) # <<<--- ADDED THIS LINE
-    msg_s4, success_s4 = create_structure_from_map(map_spaces_4, str(test_dir_s4), format_hint="Spaces (4)")
-    print(f"Result: {success_s4} - {msg_s4}")
+    run_scaffold_test(5, "Spaces (4)", map_spaces_4, "s4")
 
     map_tabs = """
 MyProjectTabs/
@@ -549,11 +561,7 @@ MyProjectTabs/
 \tREADME.md
 """
     map_tabs = map_tabs.replace("    ", "\t") # Ensure tabs
-    print("\n6. Testing Scaffold (hint='Tabs')...")
-    test_dir_tabs = scaffold_base / "tabs"
-    test_dir_tabs.mkdir(parents=True, exist_ok=True) # <<<--- ADDED THIS LINE
-    msg_tabs, success_tabs = create_structure_from_map(map_tabs, str(test_dir_tabs), format_hint="Tabs")
-    print(f"Result: {success_tabs} - {msg_tabs}")
+    run_scaffold_test(6, "Tabs", map_tabs, "tabs")
 
     map_tree = """
 MyProjectTree/
@@ -563,11 +571,7 @@ MyProjectTree/
 │   └── main.py
 └── README.md
 """
-    print("\n7. Testing Scaffold (hint='Tree')...")
-    test_dir_tree = scaffold_base / "tree"
-    test_dir_tree.mkdir(parents=True, exist_ok=True) # <<<--- ADDED THIS LINE
-    msg_tree, success_tree = create_structure_from_map(map_tree, str(test_dir_tree), format_hint="Tree")
-    print(f"Result: {success_tree} - {msg_tree}")
+    run_scaffold_test(7, "Tree", map_tree, "tree")
 
     map_generic_mix = """
 * MyProjectMix/
@@ -577,11 +581,7 @@ MyProjectTree/
     * main.py
   - README.md
 """
-    print("\n8. Testing Scaffold (hint='Generic')...")
-    test_dir_generic = scaffold_base / "generic"
-    test_dir_generic.mkdir(parents=True, exist_ok=True) # <<<--- ADDED THIS LINE
-    msg_gen, success_gen = create_structure_from_map(map_generic_mix, str(test_dir_generic), format_hint="Generic")
-    print(f"Result: {success_gen} - {msg_gen}")
+    run_scaffold_test(8, "Generic", map_generic_mix, "generic")
 
     print("\n--- Testing Complete ---")
     print(f"\nTest environment left in: {test_root}")
