@@ -56,12 +56,27 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
             current_path = Path(root).resolve()
             parent_node = node_map.get(current_path)
 
+
             if parent_node is None:
                 dirs[:] = [] # Don't descend further if parent node wasn't tracked
                 continue
 
             # Pruning
-            dirs[:] = [d for d in dirs if not any(fnmatch.fnmatch(d, pattern) for pattern in ignore_set)]
+            dirs_to_keep = []
+            for d in dirs:
+                # Check if the directory name 'd' matches any pattern in ignore_set
+                # Also check if it matches a pattern with a potential trailing slash removed
+                is_ignored = False
+                for pattern in ignore_set:
+                    # Check direct match OR if pattern ends with slash and matches when slash is removed
+                    if fnmatch.fnmatch(d, pattern) or \
+                        (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(d, pattern.rstrip('/\\'))):
+                        is_ignored = True
+                        break # Found a matching pattern, stop checking for this directory
+                print(f"DEBUG: Checking dir '{d}' against patterns. Ignored: {is_ignored}")
+                if not is_ignored:
+                    dirs_to_keep.append(d)
+            dirs[:] = dirs_to_keep # Update dirs with the filtered list        
             files = sorted([f for f in files if not any(fnmatch.fnmatch(f, pattern) for pattern in ignore_set)])
             dirs.sort()
 

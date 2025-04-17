@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import os
 import subprocess
+import fnmatch
 
 # Use relative import to access logic.py within the same package
 try:
@@ -42,13 +43,13 @@ class Tooltip:
         """Displays the tooltip window."""
         if self.tip_window or not self.text:
             return
-        x, y, cx, cy = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 25
-        y += self.widget.winfo_rooty() + 20
+        
+        x = self.widget.winfo_pointerx() + 15
+        y = self.widget.winfo_pointery() + 10
 
         self.tip_window = tk.Toplevel(self.widget)
-        self.tip_window.wm_overrideredirect(True)
-        self.tip_window.wm_geometry(f"+{x}+{y}")
+        self.tip_window.wm_overrideredirect(True) # Keep window borderless
+        self.tip_window.wm_geometry(f"+{x}+{y}") # Position near cursor
 
         label = tk.Label(self.tip_window, text=self.text, justify='left',
                          background="#ffffe0", relief='solid', borderwidth=1,
@@ -165,6 +166,8 @@ class DirMapperApp(tk.Tk):
 
         # Output Area
         self.snapshot_map_output = scrolledtext.ScrolledText(self.snapshot_frame, wrap=tk.WORD, height=15, width=60, state=tk.DISABLED)
+        self.snapshot_map_output.tag_configure("strikethrough", overstrike=True, foreground="grey50") # Configure the tag
+        self.snapshot_map_output.bind("<Button-1>", self._handle_snapshot_map_click) # Bind left-click
 
         # Action Buttons
         self.snapshot_copy_button = ttk.Button(self.snapshot_frame, text="Copy to Clipboard", command=self._copy_snapshot_to_clipboard)
@@ -183,6 +186,7 @@ class DirMapperApp(tk.Tk):
         Tooltip(self.snapshot_save_button, "Save the generated map text to a file.")
         Tooltip(self.snapshot_clear_dir_button, "Clear directory path")
         Tooltip(self.snapshot_clear_ignore_button, "Clear custom ignores")
+        Tooltip(self.snapshot_map_output, "Click on a line to toggle exclusion from copy.")
 
     def _create_scaffold_widgets(self):
         """Creates widgets for the Scaffold tab."""
@@ -401,6 +405,8 @@ class DirMapperApp(tk.Tk):
             map_result = logic.create_directory_snapshot(source_dir, custom_ignore_patterns=custom_ignores)
             self.snapshot_map_output.insert('1.0', map_result)
 
+            self.snapshot_map_output.tag_remove("strikethrough", '1.0', tk.END)
+
             if not map_result.startswith("Error:"):
                 status_msg = "Map generated."
                 if self.snapshot_auto_copy_var.get():
@@ -417,55 +423,197 @@ class DirMapperApp(tk.Tk):
              self._update_status(error_msg, is_error=True, tab='snapshot')
 
         finally:
-             self.snapshot_map_output.config(state=tk.DISABLED)
-
+             self.snapshot_map_output.config(state=tk.NORMAL)
 
     def _copy_snapshot_to_clipboard(self, show_status=True):
-        map_text = self.snapshot_map_output.get('1.0', tk.END).strip()
+        """Copies the snapshot map to the clipboard, excluding lines that are
+        either struck-through OR match a pattern in the custom ignore field.
+        """
+        map_widget = self.snapshot_map_output
+        original_map_text = map_widget.get('1.0', tk.END).strip()
+
+        # 1. Get ignore patterns from the CSV field
+        custom_ignores_str = self.snapshot_ignore_var.get()
+        # Ensure patterns are stripped and non-empty
+        ignore_patterns_from_csv = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else set()
+        # print(f"DEBUG Copy: Ignore patterns from CSV: {ignore_patterns_from_csv}") # Optional debug
+
+        lines_to_copy = []
+        try:
+            # Determine the last line number
+            last_line_index = map_widget.index('end-1c') # Index of last char
+            if not last_line_index: # Handle empty widget case
+                 num_lines = 0
+            else:
+                 num_lines = int(last_line_index.split('.')[0])
+
+            for i in range(1, num_lines + 1):
+                line_start = f"{i}.0"
+                line_end = f"{i}.end"
+                line_text = map_widget.get(line_start, line_end)
+
+                # Skip blank lines in output
+                if not line_text.strip():
+                    continue
+
+                # 2. Check for strikethrough tag
+                tags_on_line = map_widget.tag_names(line_start)
+                is_struck_through = "strikethrough" in tags_on_line
+                # print(f"DEBUG Copy: Line {i}, Struck: {is_struck_through}, Text: '{line_text}'") # Optional debug
+
+                if is_struck_through:
+                    continue # Skip struck-through lines
+
+                # 3. If not struck through, check against CSV ignores
+                #    Extract item name (simple version: strip whitespace and trailing slash)
+                #    This needs to be consistent with how names are added from clicks
+                item_name = line_text.strip().rstrip('/')
+                # Optional: Strip common list prefixes if they might appear (unlikely here)
+                # item_name = logic.PREFIX_STRIP_RE_GENERIC.sub("", item_name).strip()
+
+                is_ignored_by_csv = False
+                if item_name and ignore_patterns_from_csv: # Only check if we have a name and patterns
+                    for pattern in ignore_patterns_from_csv:
+                        # Use fnmatch for pattern matching (e.g., *.log) and handle dirs
+                        if fnmatch.fnmatch(item_name, pattern) or \
+                           (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(item_name, pattern.rstrip('/\\'))):
+                            is_ignored_by_csv = True
+                            # print(f"DEBUG Copy: Line {i} item '{item_name}' matched CSV pattern '{pattern}'") # Optional debug
+                            break
+
+                if is_ignored_by_csv:
+                    continue # Skip lines matching CSV ignores
+
+                # 4. If not struck through AND not ignored by CSV, add it
+                lines_to_copy.append(line_text)
+
+        except tk.TclError as e:
+             print(f"ERROR Copy: Error processing text widget content: {e}")
+             messagebox.showerror("Error", f"Error preparing text for copy:\n{e}")
+             if show_status: self._update_status("Error during copy preparation.", is_error=True, tab='snapshot')
+             return False # Indicate copy failed
+
+        # 5. Join and copy
+        final_text = "\n".join(lines_to_copy)
+
+        # --- Status/Clipboard Logic ---
         status_msg = ""
         is_error = False
         is_success = False
         copied = False
 
-        if map_text and not map_text.startswith("Error:"):
+        if final_text:
             try:
-                pyperclip.copy(map_text)
-                status_msg = "Map copied to clipboard."
+                pyperclip.copy(final_text)
+                # Be more specific about success
+                if len(lines_to_copy) < num_lines and original_map_text:
+                     status_msg = "Map (with exclusions) copied to clipboard."
+                else: # Copied everything or map was empty
+                     status_msg = "Map copied to clipboard."
                 is_success = True
                 copied = True
             except Exception as e:
                 messagebox.showerror("Clipboard Error", f"Could not copy to clipboard:\n{e}")
                 status_msg = "Failed to copy map to clipboard."
                 is_error = True
-        elif not map_text:
-             if show_status: messagebox.showwarning("No Content", "Nothing to copy.")
-             status_msg = "Copy failed: No map content."
-             is_error = True
-        else: # It's an error message
-             if show_status: messagebox.showwarning("Cannot Copy Error", "Cannot copy error message.")
-             status_msg = "Copy failed: Cannot copy error message."
-             is_error = True
+        elif not original_map_text: # Check if original map was empty
+            if show_status: messagebox.showwarning("No Content", "Nothing to copy.")
+            status_msg = "Copy failed: No map content."
+            is_error = True # Treat as non-success
+        else: # Original map had content, but all lines were excluded
+            if show_status: messagebox.showwarning("Empty Result", "All lines were excluded, nothing copied.")
+            status_msg = "Copy failed: All lines excluded."
+            is_error = True # Treat as non-success
 
         if show_status:
              self._update_status(status_msg, is_error=is_error, is_success=is_success, tab='snapshot')
-        return copied
+        return copied # Return True if copy succeeded, False otherwise
+    
+# In dirmapper/app.py -> DirMapperApp class
+
+# In dirmapper/app.py -> DirMapperApp class
+
+    def _handle_snapshot_map_click(self, event):
+        """Handles clicks on the snapshot map output area.
+        Toggles strikethrough tag, updates ignore CSV list, and optionally auto-copies.
+        """
+        widget = self.snapshot_map_output
+        tag_name = "strikethrough"
+
+        if str(widget.cget("state")) != tk.NORMAL:
+             return
+        try:
+            index = widget.index(f"@{event.x},{event.y}")
+            if not widget.get(index, f"{index} +1c").strip(): return
+            line_start = widget.index(f"{index} linestart")
+            line_end = widget.index(f"{index} lineend")
+            line_text = widget.get(line_start, line_end)
+            if not line_text.strip(): return
+
+            current_tags = widget.tag_names(line_start)
+            was_struck_through = tag_name in current_tags
+
+            # --- Toggle Tag ---
+            if was_struck_through:
+                widget.tag_remove(tag_name, line_start, line_end)
+                is_now_struck_through = False
+            else:
+                widget.tag_add(tag_name, line_start, line_end)
+                is_now_struck_through = True
+
+            # --- Update CSV Field ---
+            item_name = line_text.strip().rstrip('/')
+            status_action = "" # Initialize status action message
+            if item_name:
+                current_csv_str = self.snapshot_ignore_var.get()
+                ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip())
+
+                if is_now_struck_through:
+                    if item_name not in ignore_set:
+                         ignore_set.add(item_name)
+                         status_action = f"Added '{item_name}' to"
+                else:
+                    if item_name in ignore_set:
+                        ignore_set.remove(item_name)
+                        status_action = f"Removed '{item_name}' from"
+
+                if status_action: # Only update if something changed
+                     new_csv_str = ", ".join(sorted(list(ignore_set)))
+                     self.snapshot_ignore_var.set(new_csv_str)
+                     self._update_status(f"{status_action} custom ignores.", tab='snapshot')
+
+            # --- Step 5: Check and Trigger Auto-Copy ---
+            # Check if auto-copy is enabled AND if an action was taken
+            # (We might only want to auto-copy if the state actually changed)
+            if status_action and self.snapshot_auto_copy_var.get():
+                 print("DEBUG: Auto-copy triggered by click.") # Optional debug
+                 # Call copy, but don't show the normal status popup from copy itself
+                 self._copy_snapshot_to_clipboard(show_status=False)
+                 # Optionally update status slightly differently for auto-copy?
+                 self._update_status(f"{status_action} ignores. Auto-copied.", tab='snapshot')
+            # --- End Step 5 ---
+
+            return "break"
+        except tk.TclError as e:
+            print(f"DEBUG: Error handling click: {e}")
+            pass
 
 
     def _save_snapshot_as(self):
         map_text = self.snapshot_map_output.get('1.0', tk.END).strip()
         if not map_text or map_text.startswith("Error:"):
-             messagebox.showwarning("No Content", "Nothing to save.")
-             self._update_status("Save failed: No map content.", is_error=True, tab='snapshot')
-             return
+            messagebox.showwarning("No Content", "Nothing to save.")
+            self._update_status("Save failed: No map content.", is_error=True, tab='snapshot')
+            return
 
         suggested_filename = "directory_map.txt"
         try:
-             first_line = map_text.splitlines()[0].strip()
-             root_name = first_line.rstrip('/') if first_line else ""
-             if root_name:
-                 safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', root_name) # Sanitize for filename
-                 if not safe_root_name: safe_root_name = "map"
-                 suggested_filename = f"{safe_root_name}_map.txt"
+            first_line = map_text.splitlines()[0].strip()
+            root_name = first_line.rstrip('/') if first_line else ""
+            if root_name:
+                safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', root_name) # Sanitize for filename
+                if not safe_root_name: safe_root_name = "map"
+                suggested_filename = f"{safe_root_name}_map.txt"
         except IndexError: pass
 
         file_path = filedialog.asksaveasfilename(
@@ -484,7 +632,7 @@ class DirMapperApp(tk.Tk):
                 messagebox.showerror("File Save Error", f"Could not save file:\n{e}")
                 self._update_status(f"Failed to save map to {saved_filename}", is_error=True, tab='snapshot')
         else:
-             self._update_status("Save cancelled.", tab='snapshot')
+            self._update_status("Save cancelled.", tab='snapshot')
 
 
     def _browse_scaffold_base_dir(self):
@@ -499,13 +647,13 @@ class DirMapperApp(tk.Tk):
         try:
             clipboard_content = pyperclip.paste()
             if clipboard_content:
-                 self.scaffold_map_input.config(state=tk.NORMAL)
-                 self.scaffold_map_input.delete('1.0', tk.END)
-                 self.scaffold_map_input.insert('1.0', clipboard_content)
-                 self._update_status("Pasted map from clipboard.", is_success=True, tab='scaffold')
-                 self._check_scaffold_readiness()
+                self.scaffold_map_input.config(state=tk.NORMAL)
+                self.scaffold_map_input.delete('1.0', tk.END)
+                self.scaffold_map_input.insert('1.0', clipboard_content)
+                self._update_status("Pasted map from clipboard.", is_success=True, tab='scaffold')
+                self._check_scaffold_readiness()
             else:
-                 self._update_status("Clipboard is empty.", tab='scaffold')
+                self._update_status("Clipboard is empty.", tab='scaffold')
         except Exception as e:
             messagebox.showerror("Clipboard Error", f"Could not paste from clipboard:\n{e}")
             self._update_status("Failed to paste from clipboard.", is_error=True, tab='scaffold')
@@ -527,16 +675,16 @@ class DirMapperApp(tk.Tk):
 
     def _load_map_file(self):
         file_path = filedialog.askopenfilename(
-             filetypes=[("Text Files", "*.txt"), ("Map Files", "*.map"), ("All Files", "*.*")],
-             title="Load Directory Map File"
+            filetypes=[("Text Files", "*.txt"), ("Map Files", "*.map"), ("All Files", "*.*")],
+            title="Load Directory Map File"
         )
         if file_path:
-             loaded_ok = self._load_map_from_path(Path(file_path))
-             if loaded_ok:
-                 self._update_status(f"Loaded map from {Path(file_path).name}", is_success=True, tab='scaffold')
-                 self._check_scaffold_readiness()
-             else:
-                 self._update_status("Error loading map file.", is_error=True, tab='scaffold')
+            loaded_ok = self._load_map_from_path(Path(file_path))
+            if loaded_ok:
+                self._update_status(f"Loaded map from {Path(file_path).name}", is_success=True, tab='scaffold')
+                self._check_scaffold_readiness()
+            else:
+                self._update_status("Error loading map file.", is_error=True, tab='scaffold')
 
 
     def _create_structure(self):
@@ -556,56 +704,56 @@ class DirMapperApp(tk.Tk):
             self._update_status("Scaffold failed: Map input empty.", is_error=True, tab='scaffold')
             return
         if not base_dir or not Path(base_dir).is_dir():
-             messagebox.showwarning("Input Required", "Please select a valid base directory.")
-             self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
-             return
+            messagebox.showwarning("Input Required", "Please select a valid base directory.")
+            self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
+            return
 
         # 4. Call Logic
         self._update_status("Creating structure...", tab='scaffold') # Neutral status while working
 
         try:
-             # Pass format_hint to logic function
-             msg, success = logic.create_structure_from_map(map_text, base_dir, format_hint)
+            # Pass format_hint to logic function
+            msg, success = logic.create_structure_from_map(map_text, base_dir, format_hint)
 
-             # 5. Update status label with result and color
-             self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
+            # 5. Update status label with result and color
+            self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
 
-             # 6. On Success ONLY - Store path and show 'Open Folder' button
-             if success:
-                 try:
-                      # Determine the full path to the root directory that was created
-                      created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-                      # Sanitize root name same way as creation logic
-                      safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
-                      if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
+            # 6. On Success ONLY - Store path and show 'Open Folder' button
+            if success:
+                try:
+                    # Determine the full path to the root directory that was created
+                    created_root_name = map_text.splitlines()[0].strip().rstrip('/')
+                    # Sanitize root name same way as creation logic
+                    safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
+                    if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
 
-                      if created_root_name: # Check if we got a name
-                           full_path = Path(base_dir) / safe_root_name
-                           # Check if it actually exists before enabling button/storing path
-                           if full_path.is_dir():
-                               self.last_scaffold_path = full_path # Store the valid path
-                               self.scaffold_open_folder_button.grid() # Show the button
-                               # print(f"Debug: Stored scaffold path: {self.last_scaffold_path}") # Optional debug
-                           else:
-                               print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
-                               self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
-                      else:
-                           print("Warning: Could not determine created root folder name from map.")
-                           self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
-                           # Optionally enable opening the base directory itself?
-                           # self.last_scaffold_path = Path(base_dir)
-                           # self.scaffold_open_folder_button.grid()
+                    if created_root_name: # Check if we got a name
+                        full_path = Path(base_dir) / safe_root_name
+                        # Check if it actually exists before enabling button/storing path
+                        if full_path.is_dir():
+                            self.last_scaffold_path = full_path # Store the valid path
+                            self.scaffold_open_folder_button.grid() # Show the button
+                            # print(f"Debug: Stored scaffold path: {self.last_scaffold_path}") # Optional debug
+                        else:
+                            print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
+                            self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
+                    else:
+                        print("Warning: Could not determine created root folder name from map.")
+                        self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
+                        # Optionally enable opening the base directory itself?
+                        # self.last_scaffold_path = Path(base_dir)
+                        # self.scaffold_open_folder_button.grid()
 
-                 except Exception as e:
-                      print(f"Warning: Error processing success state (storing path/showing button): {e}")
-                      self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
-                      self.last_scaffold_path = None
+                except Exception as e:
+                    print(f"Warning: Error processing success state (storing path/showing button): {e}")
+                    self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
+                    self.last_scaffold_path = None
 
         except Exception as e:
-             # Catch unexpected errors from the logic layer or here
-             error_msg = f"Fatal error during creation: {e}"
-             self._update_status(error_msg, is_error=True, tab='scaffold')
-             messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
+            # Catch unexpected errors from the logic layer or here
+            error_msg = f"Fatal error during creation: {e}"
+            self._update_status(error_msg, is_error=True, tab='scaffold')
+            messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
 
 
     def _open_last_scaffold_folder(self):
@@ -616,12 +764,12 @@ class DirMapperApp(tk.Tk):
 
         path_to_open = Path(self.last_scaffold_path) # Ensure it's a Path object
         if not path_to_open.is_dir():
-             # Maybe the base dir was stored if root couldn't be determined? Check that.
-             if self.last_scaffold_path.is_dir():
-                 path_to_open = self.last_scaffold_path # Open base dir instead
-             else:
-                 self._update_status(f"Output folder not found: {self.last_scaffold_path}", is_error=True, tab='scaffold')
-                 return
+            # Maybe the base dir was stored if root couldn't be determined? Check that.
+            if self.last_scaffold_path.is_dir():
+                path_to_open = self.last_scaffold_path # Open base dir instead
+            else:
+                self._update_status(f"Output folder not found: {self.last_scaffold_path}", is_error=True, tab='scaffold')
+                return
 
         path_str = str(path_to_open)
         try:
@@ -636,13 +784,13 @@ class DirMapperApp(tk.Tk):
             self._update_status(f"Opened folder: {path_to_open.name}", is_success=True, tab='scaffold')
 
         except FileNotFoundError:
-             err_msg = f"Could not find command ('open' or 'xdg-open') to open folder for platform {sys.platform}."
-             messagebox.showerror("Error", err_msg)
-             self._update_status("Error opening folder: command not found.", is_error=True, tab='scaffold')
+            err_msg = f"Could not find command ('open' or 'xdg-open') to open folder for platform {sys.platform}."
+            messagebox.showerror("Error", err_msg)
+            self._update_status("Error opening folder: command not found.", is_error=True, tab='scaffold')
         except subprocess.CalledProcessError as e:
-              err_msg = f"System command failed to open folder:\n{e}"
-              messagebox.showerror("Error", err_msg)
-              self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
+            err_msg = f"System command failed to open folder:\n{e}"
+            messagebox.showerror("Error", err_msg)
+            self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
         except Exception as e:
             err_msg = f"Could not open folder '{path_to_open.name}':\n{e}"
             messagebox.showerror("Error", err_msg)
