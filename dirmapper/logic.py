@@ -73,7 +73,6 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
                         (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(d, pattern.rstrip('/\\'))):
                         is_ignored = True
                         break # Found a matching pattern, stop checking for this directory
-                print(f"DEBUG: Checking dir '{d}' against patterns. Ignored: {is_ignored}")
                 if not is_ignored:
                     dirs_to_keep.append(d)
             dirs[:] = dirs_to_keep # Update dirs with the filtered list        

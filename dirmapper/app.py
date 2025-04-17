@@ -550,20 +550,32 @@ class DirMapperApp(tk.Tk):
             line_text = widget.get(line_start, line_end)
             if not line_text.strip(): return
 
-            current_tags = widget.tag_names(line_start)
+            # --- Calculate Content Range ---
+            stripped_text = line_text.strip()
+            if not stripped_text: # Should be caught above, but safety check
+                 return
+            leading_spaces = len(line_text) - len(line_text.lstrip())
+            content_len = len(stripped_text)
+
+            # Calculate precise start and end indices for the tag
+            content_start_index = f"{line_start} + {leading_spaces} chars"
+            content_end_index = f"{content_start_index} + {content_len} chars"
+            # --- End Calculation ---
+
+            current_tags = widget.tag_names(content_start_index)
             was_struck_through = tag_name in current_tags
 
             # --- Toggle Tag ---
             if was_struck_through:
-                widget.tag_remove(tag_name, line_start, line_end)
+                widget.tag_remove(tag_name, content_start_index, content_end_index)
                 is_now_struck_through = False
             else:
-                widget.tag_add(tag_name, line_start, line_end)
+                widget.tag_add(tag_name, content_start_index, content_end_index)
                 is_now_struck_through = True
 
             # --- Update CSV Field ---
-            item_name = line_text.strip().rstrip('/')
-            status_action = "" # Initialize status action message
+            item_name = stripped_text.rstrip('/') # Use already stripped text
+            status_action = ""
             if item_name:
                 current_csv_str = self.snapshot_ignore_var.get()
                 ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip())
@@ -593,7 +605,6 @@ class DirMapperApp(tk.Tk):
                  self._update_status(f"{status_action} ignores. Auto-copied.", tab='snapshot')
             # --- End Step 5 ---
 
-            return "break"
         except tk.TclError as e:
             print(f"DEBUG: Error handling click: {e}")
             pass
