@@ -529,86 +529,138 @@ class DirMapperApp(tk.Tk):
              self._update_status(status_msg, is_error=is_error, is_success=is_success, tab='snapshot')
         return copied # Return True if copy succeeded, False otherwise
     
-# In dirmapper/app.py -> DirMapperApp class
-
-# In dirmapper/app.py -> DirMapperApp class
-
     def _handle_snapshot_map_click(self, event):
         """Handles clicks on the snapshot map output area.
-        Toggles strikethrough tag, updates ignore CSV list, and optionally auto-copies.
+        Toggles strikethrough tag ON TEXT ONLY for the clicked item and its
+        descendants (if it's a directory). Updates ignore CSV list,
+        and optionally auto-copies.
         """
         widget = self.snapshot_map_output
         tag_name = "strikethrough"
 
         if str(widget.cget("state")) != tk.NORMAL:
              return
+
         try:
-            index = widget.index(f"@{event.x},{event.y}")
-            if not widget.get(index, f"{index} +1c").strip(): return
-            line_start = widget.index(f"{index} linestart")
-            line_end = widget.index(f"{index} lineend")
-            line_text = widget.get(line_start, line_end)
-            if not line_text.strip(): return
-
-            # --- Calculate Content Range ---
-            stripped_text = line_text.strip()
-            if not stripped_text: # Should be caught above, but safety check
+            clicked_index_str = widget.index(f"@{event.x},{event.y}")
+            # Ensure click wasn't on empty space after last line
+            if not widget.get(clicked_index_str, f"{clicked_index_str} +1c").strip():
                  return
-            leading_spaces = len(line_text) - len(line_text.lstrip())
-            content_len = len(stripped_text)
 
-            # Calculate precise start and end indices for the tag
-            content_start_index = f"{line_start} + {leading_spaces} chars"
-            content_end_index = f"{content_start_index} + {content_len} chars"
-            # --- End Calculation ---
+            clicked_line_start = widget.index(f"{clicked_index_str} linestart")
+            clicked_line_end = widget.index(f"{clicked_index_str} lineend")
+            clicked_line_num = int(clicked_line_start.split('.')[0])
+            clicked_line_text = widget.get(clicked_line_start, clicked_line_end)
 
-            current_tags = widget.tag_names(content_start_index)
-            was_struck_through = tag_name in current_tags
+            # Ignore clicks on completely blank lines
+            if not clicked_line_text.strip():
+                return
 
-            # --- Toggle Tag ---
-            if was_struck_through:
-                widget.tag_remove(tag_name, content_start_index, content_end_index)
-                is_now_struck_through = False
+            # --- Calculate initial line info ---
+            clicked_stripped_text = clicked_line_text.strip()
+            clicked_leading_spaces = len(clicked_line_text) - len(clicked_line_text.lstrip())
+            clicked_content_start_index = f"{clicked_line_start} + {clicked_leading_spaces} chars"
+
+            # --- Determine if Directory (Heuristic) ---
+            is_likely_directory = False
+            if clicked_stripped_text.endswith('/'):
+                is_likely_directory = True
             else:
-                widget.tag_add(tag_name, content_start_index, content_end_index)
-                is_now_struck_through = True
+                next_line_num = clicked_line_num + 1
+                next_line_start = f"{next_line_num}.0"
+                if widget.compare(next_line_start, "<", "end-1c"):
+                    next_line_text = widget.get(next_line_start, f"{next_line_num}.end")
+                    # Check if next line is not blank before calculating indent
+                    if next_line_text.strip():
+                         next_indent = len(next_line_text) - len(next_line_text.lstrip())
+                         if next_indent > clicked_leading_spaces:
+                             is_likely_directory = True
 
-            # --- Update CSV Field ---
-            item_name = stripped_text.rstrip('/') # Use already stripped text
-            status_action = ""
-            if item_name:
-                current_csv_str = self.snapshot_ignore_var.get()
-                ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip())
+            # --- Determine Action based on initial click ---
+            initial_tags = widget.tag_names(clicked_content_start_index)
+            was_initially_struck_through = tag_name in initial_tags
+            apply_tag_action = not was_initially_struck_through # If it wasn't struck, action is to apply tag
 
-                if is_now_struck_through:
-                    if item_name not in ignore_set:
-                         ignore_set.add(item_name)
-                         status_action = f"Added '{item_name}' to"
+            # --- Identify all lines to process (clicked + children if directory) ---
+            lines_to_process_indices = [(clicked_line_num, clicked_line_start)] # List of (line_num, line_start_index)
+            if is_likely_directory:
+                # Start checking from the line AFTER the clicked one
+                current_check_line_num = clicked_line_num + 1
+                while True:
+                    current_check_start = f"{current_check_line_num}.0"
+                    # Stop if we've gone past the end of the text widget
+                    if not widget.compare(current_check_start, "<", "end-1c"):
+                        break
+
+                    current_check_text = widget.get(current_check_start, f"{current_check_line_num}.end")
+                    # Skip blank lines when checking hierarchy
+                    if not current_check_text.strip():
+                        current_check_line_num += 1
+                        continue
+
+                    current_check_indent = len(current_check_text) - len(current_check_text.lstrip())
+
+                    if current_check_indent > clicked_leading_spaces:
+                        # It's a child/descendant, add to list
+                        lines_to_process_indices.append((current_check_line_num, current_check_start))
+                    else:
+                        # Indentation is same or less, stop searching down this branch
+                        break
+                    current_check_line_num += 1
+
+            # --- Process all identified lines ---
+            ignore_set_changed = False
+            # Get current CSV ignores ONCE before the loop
+            current_csv_str = self.snapshot_ignore_var.get()
+            ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip()) if current_csv_str else set()
+
+            for line_num, line_start_index in lines_to_process_indices:
+                line_end_index = f"{line_num}.end"
+                line_text_loop = widget.get(line_start_index, line_end_index)
+                stripped_text_loop = line_text_loop.strip()
+                item_name = stripped_text_loop.rstrip('/')
+
+                # Calculate content range for this specific line
+                leading_spaces_loop = len(line_text_loop) - len(line_text_loop.lstrip())
+                content_len_loop = len(stripped_text_loop)
+                content_start_idx_loop = f"{line_start_index} + {leading_spaces_loop} chars"
+                content_end_idx_loop = f"{content_start_idx_loop} + {content_len_loop} chars"
+
+                # Apply or remove tag
+                if apply_tag_action:
+                    widget.tag_add(tag_name, content_start_idx_loop, content_end_idx_loop)
+                    if item_name and item_name not in ignore_set:
+                        ignore_set.add(item_name)
+                        ignore_set_changed = True
                 else:
-                    if item_name in ignore_set:
+                    widget.tag_remove(tag_name, content_start_idx_loop, content_end_idx_loop)
+                    if item_name and item_name in ignore_set:
                         ignore_set.remove(item_name)
-                        status_action = f"Removed '{item_name}' from"
+                        ignore_set_changed = True
 
-                if status_action: # Only update if something changed
-                     new_csv_str = ", ".join(sorted(list(ignore_set)))
-                     self.snapshot_ignore_var.set(new_csv_str)
-                     self._update_status(f"{status_action} custom ignores.", tab='snapshot')
+            # --- Update CSV and Status Bar (only if changes were made) ---
+            status_action = ""
+            if ignore_set_changed:
+                new_csv_str = ", ".join(sorted(list(ignore_set)))
+                self.snapshot_ignore_var.set(new_csv_str)
+                # Determine overall action for status message
+                if apply_tag_action:
+                     status_action = "Added item(s) to"
+                else:
+                     status_action = "Removed item(s) from"
+                self._update_status(f"{status_action} custom ignores.", tab='snapshot')
 
-            # --- Step 5: Check and Trigger Auto-Copy ---
-            # Check if auto-copy is enabled AND if an action was taken
-            # (We might only want to auto-copy if the state actually changed)
-            if status_action and self.snapshot_auto_copy_var.get():
-                 print("DEBUG: Auto-copy triggered by click.") # Optional debug
-                 # Call copy, but don't show the normal status popup from copy itself
+            # --- Auto-Copy Check ---
+            # Trigger if the ignore set was changed by the click action
+            if ignore_set_changed and self.snapshot_auto_copy_var.get():
+                 # print("DEBUG: Auto-copy triggered by click.")
                  self._copy_snapshot_to_clipboard(show_status=False)
-                 # Optionally update status slightly differently for auto-copy?
-                 self._update_status(f"{status_action} ignores. Auto-copied.", tab='snapshot')
-            # --- End Step 5 ---
+                 # self._update_status(f"{status_action} ignores. Auto-copied.", tab='snapshot') # Optional combined status
 
         except tk.TclError as e:
             print(f"DEBUG: Error handling click: {e}")
             pass
-
+        # Optional: return "break"
 
     def _save_snapshot_as(self):
         map_text = self.snapshot_map_output.get('1.0', tk.END).strip()
