@@ -9,6 +9,8 @@ import sys
 import os
 import subprocess
 import fnmatch
+import shutil
+import re
 
 # Use relative import to access logic.py within the same package
 try:
@@ -197,6 +199,9 @@ class DirMapperApp(tk.Tk):
         self.scaffold_clear_map_button = ttk.Button(self.scaffold_input_buttons_frame, text="Clear Map", command=lambda: self.scaffold_map_input.delete('1.0', tk.END))
         self.scaffold_map_input = scrolledtext.ScrolledText(self.scaffold_frame, wrap=tk.WORD, height=15, width=60)
 
+        self.scaffold_map_input.tag_configure("strikethrough", overstrike=True, foreground="grey50")
+        self.scaffold_map_input.bind("<Button-1>", self._handle_scaffold_map_click)
+
         # Config Row Frame
         self.scaffold_config_frame = ttk.Frame(self.scaffold_frame)
         self.scaffold_base_dir_label = ttk.Label(self.scaffold_config_frame, text="Base Directory:")
@@ -233,6 +238,7 @@ class DirMapperApp(tk.Tk):
         Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
         Tooltip(self.scaffold_load_button, "Load map text from a file into the input area.")
         Tooltip(self.scaffold_clear_map_button, "Clear the map input area.")
+        Tooltip(self.scaffold_map_input, "Enter or paste your directory map here.\nClick lines to toggle exclusion from creation.")
         Tooltip(self.scaffold_browse_base_button, "Select the existing parent directory where the new structure will be created.")
         Tooltip(self.scaffold_clear_base_dir_button, "Clear base directory path")
         Tooltip(self.scaffold_format_combo, "Select the expected format of the input map (Auto-Detect recommended).")
@@ -749,17 +755,112 @@ class DirMapperApp(tk.Tk):
             else:
                 self._update_status("Error loading map file.", is_error=True, tab='scaffold')
 
+    def _handle_scaffold_map_click(self, event):
+        """Handles clicks on the scaffold map input area.
+        Toggles strikethrough tag ON TEXT ONLY for the clicked item and its
+        descendants (based on indentation).
+        """
+        widget = self.scaffold_map_input
+        tag_name = "strikethrough"
+
+        if str(widget.cget("state")) != tk.NORMAL:
+             return
+
+        try:
+            clicked_index_str = widget.index(f"@{event.x},{event.y}")
+            # Ensure click wasn't on empty space after last line
+            if not widget.get(clicked_index_str, f"{clicked_index_str} +1c").strip():
+                 return
+
+            clicked_line_start = widget.index(f"{clicked_index_str} linestart")
+            # clicked_line_end = widget.index(f"{clicked_index_str} lineend") # Not needed immediately
+            clicked_line_num = int(clicked_line_start.split('.')[0])
+            clicked_line_text = widget.get(clicked_line_start, f"{clicked_line_start} lineend") # Get full line text
+
+            # Ignore clicks on completely blank lines
+            if not clicked_line_text.strip():
+                return
+
+            # --- Calculate initial line info ---
+            clicked_stripped_text = clicked_line_text.strip()
+            clicked_leading_spaces = len(clicked_line_text) - len(clicked_line_text.lstrip())
+            # Calculate start index of actual content for checking tags
+            content_start_index_clicked = f"{clicked_line_start} + {clicked_leading_spaces} chars"
+
+            # --- Determine Action based on initial click ---
+            initial_tags = widget.tag_names(content_start_index_clicked)
+            was_initially_struck_through = tag_name in initial_tags
+            apply_tag_action = not was_initially_struck_through # If it wasn't struck, action is to apply tag
+
+            # --- Identify all lines to process (clicked + children) ---
+            # We need indentation to determine hierarchy
+            lines_to_process_indices = [(clicked_line_num, clicked_line_start)] # List of (line_num, line_start_index)
+
+            # Check subsequent lines for children only if the clicked line could be a parent
+            # (No need to look for children if clicking the last line, for example)
+            current_check_line_num = clicked_line_num + 1
+            while True:
+                current_check_start = f"{current_check_line_num}.0"
+                # Stop if we've gone past the end of the text widget
+                if not widget.compare(current_check_start, "<", "end-1c"):
+                    break
+
+                current_check_text = widget.get(current_check_start, f"{current_check_line_num}.end")
+                # Skip blank lines when checking hierarchy
+                if not current_check_text.strip():
+                    current_check_line_num += 1
+                    continue
+
+                current_check_indent = len(current_check_text) - len(current_check_text.lstrip())
+
+                if current_check_indent > clicked_leading_spaces:
+                    # It's a child/descendant, add to list
+                    lines_to_process_indices.append((current_check_line_num, current_check_start))
+                else:
+                    # Indentation is same or less, stop searching down this branch
+                    break
+                current_check_line_num += 1
+
+            # --- Process all identified lines (Apply/Remove Tags Visually) ---
+            for line_num, line_start_index in lines_to_process_indices:
+                line_end_index = f"{line_num}.end"
+                line_text_loop = widget.get(line_start_index, line_end_index)
+                stripped_text_loop = line_text_loop.strip()
+
+                # Calculate content range for this specific line
+                leading_spaces_loop = len(line_text_loop) - len(line_text_loop.lstrip())
+                # Avoid tagging if line is actually blank after stripping potential prefixes later
+                if not stripped_text_loop:
+                    continue
+                content_len_loop = len(stripped_text_loop)
+                content_start_idx_loop = f"{line_start_index} + {leading_spaces_loop} chars"
+                content_end_idx_loop = f"{content_start_idx_loop} + {content_len_loop} chars"
+
+                # Apply or remove tag
+                if apply_tag_action:
+                    widget.tag_add(tag_name, content_start_idx_loop, content_end_idx_loop)
+                else:
+                    widget.tag_remove(tag_name, content_start_idx_loop, content_end_idx_loop)
+
+        except tk.TclError as e:
+            print(f"DEBUG: Error handling scaffold click: {e}")
+            pass
 
     def _create_structure(self):
-        """Handles the 'Create Structure' button click."""
+        """Handles the 'Create Structure' button click.
+        Gathers map text, identifies excluded (struck-through) lines,
+        and calls the backend logic function.
+        """
         # 1. Reset path variable and hide the button initially
         self.last_scaffold_path = None
         self.scaffold_open_folder_button.grid_remove() # Ensure button is hidden
 
         # 2. Get Inputs
-        map_text = self.scaffold_map_input.get('1.0', tk.END).strip()
+        map_widget = self.scaffold_map_input
+        map_text = map_widget.get('1.0', tk.END).strip()
         base_dir = self.scaffold_base_dir_var.get()
         format_hint = self.scaffold_format_var.get()
+        tag_name = "strikethrough"
 
         # 3. Input Validation
         if not map_text:
@@ -767,57 +868,102 @@ class DirMapperApp(tk.Tk):
             self._update_status("Scaffold failed: Map input empty.", is_error=True, tab='scaffold')
             return
         if not base_dir or not Path(base_dir).is_dir():
-            messagebox.showwarning("Input Required", "Please select a valid base directory.")
-            self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
-            return
+             messagebox.showwarning("Input Required", "Please select a valid base directory.")
+             self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
+             return
 
-        # 4. Call Logic
+        # --- NEW: Identify Excluded Lines ---
+        excluded_line_numbers = set()
+        try:
+            last_line_index = map_widget.index('end-1c')
+            if last_line_index:
+                num_lines = int(last_line_index.split('.')[0])
+                for i in range(1, num_lines + 1):
+                    line_start = f"{i}.0"
+                    line_end = f"{i}.end"
+                    line_text = map_widget.get(line_start, line_end)
+                    stripped_text = line_text.strip()
+
+                    # Skip blank lines
+                    if not stripped_text:
+                        continue
+
+                    # Calculate where content starts to check for the tag accurately
+                    leading_spaces = len(line_text) - len(line_text.lstrip())
+                    content_start_index = f"{line_start} + {leading_spaces} chars"
+
+                    # Check tags starting from the first non-whitespace character
+                    tags_on_content = map_widget.tag_names(content_start_index)
+                    if tag_name in tags_on_content:
+                        excluded_line_numbers.add(i) # Add 1-based line number
+            print(f"DEBUG Create Structure: Excluded lines: {excluded_line_numbers}") # Optional debug
+        except tk.TclError as e:
+            print(f"ERROR Create Structure: Error reading tags: {e}")
+            messagebox.showerror("Error", f"Error processing map exclusions:\n{e}")
+            self._update_status("Scaffold failed: Error processing exclusions.", is_error=True, tab='scaffold')
+            return
+        # --- END NEW SECTION ---
+
+        # 4. Call Logic (with the new 'excluded_lines' argument)
         self._update_status("Creating structure...", tab='scaffold') # Neutral status while working
 
         try:
-            # Pass format_hint to logic function
-            msg, success = logic.create_structure_from_map(map_text, base_dir, format_hint)
+             msg, success = logic.create_structure_from_map(
+                 map_text,
+                 base_dir,
+                 format_hint,
+                 excluded_lines=excluded_line_numbers
+            )
 
-            # 5. Update status label with result and color
-            self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
+             # 5. Update status label with result and color
+             self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
 
-            # 6. On Success ONLY - Store path and show 'Open Folder' button
-            if success:
-                try:
-                    # Determine the full path to the root directory that was created
-                    created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-                    # Sanitize root name same way as creation logic
-                    safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
-                    if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
+             # 6. On Success ONLY - Store path and show 'Open Folder' button
+             if success:
+                 # ... (rest of the success logic remains the same) ...
+                 try:
+                      # Determine the full path to the root directory that was created
+                      # This part remains the same, finding the root from the original map text
+                      created_root_name = map_text.splitlines()[0].strip().rstrip('/')
+                      safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
+                      if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
 
-                    if created_root_name: # Check if we got a name
-                        full_path = Path(base_dir) / safe_root_name
-                        # Check if it actually exists before enabling button/storing path
-                        if full_path.is_dir():
-                            self.last_scaffold_path = full_path # Store the valid path
-                            self.scaffold_open_folder_button.grid() # Show the button
-                            # print(f"Debug: Stored scaffold path: {self.last_scaffold_path}") # Optional debug
-                        else:
-                            print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
-                            self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
-                    else:
-                        print("Warning: Could not determine created root folder name from map.")
-                        self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
-                        # Optionally enable opening the base directory itself?
-                        # self.last_scaffold_path = Path(base_dir)
-                        # self.scaffold_open_folder_button.grid()
+                      if created_root_name:
+                           full_path = Path(base_dir) / safe_root_name
+                           if full_path.is_dir():
+                               self.last_scaffold_path = full_path
+                               self.scaffold_open_folder_button.grid()
+                           else:
+                               print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
+                               self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
+                      else:
+                           print("Warning: Could not determine created root folder name from map.")
+                           self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
 
-                except Exception as e:
-                    print(f"Warning: Error processing success state (storing path/showing button): {e}")
-                    self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
-                    self.last_scaffold_path = None
+                 except Exception as e:
+                      print(f"Warning: Error processing success state (storing path/showing button): {e}")
+                      self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
+                      self.last_scaffold_path = None
+
+        except TypeError as te:
+             # --- EXPECT THIS ERROR UNTIL logic.py is updated ---
+             if 'excluded_lines' in str(te):
+                  error_msg = "Error: Backend logic needs update for exclusions. Please modify logic.py."
+                  print(error_msg)
+                  messagebox.showerror("Code Update Needed", error_msg)
+                  self._update_status(error_msg, is_error=True, tab='scaffold')
+             else:
+                  # Different TypeError
+                  error_msg = f"Error during creation: {te}"
+                  print(f"ERROR: Unexpected TypeError in _create_structure: {te}")
+                  messagebox.showerror("Error", error_msg)
+                  self._update_status(error_msg, is_error=True, tab='scaffold')
 
         except Exception as e:
-            # Catch unexpected errors from the logic layer or here
-            error_msg = f"Fatal error during creation: {e}"
-            self._update_status(error_msg, is_error=True, tab='scaffold')
-            messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
-
+             # Catch other unexpected errors
+             error_msg = f"Fatal error during creation: {e}"
+             self._update_status(error_msg, is_error=True, tab='scaffold')
+             messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
 
     def _open_last_scaffold_folder(self):
         """Opens the last successfully created scaffold output folder."""

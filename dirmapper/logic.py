@@ -1,9 +1,8 @@
 import os
 import fnmatch
-import re # For format detection and parsing
+import re
 from pathlib import Path
 import shutil
-# import pprint # No longer needed
 
 # --- Default Configuration ---
 DEFAULT_IGNORE_PATTERNS = {
@@ -117,36 +116,43 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
 
 # --- Main Public Function ---
 
-def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect"):
+def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect", excluded_lines=None): # MODIFIED
     """
     Main scaffolding function. Parses map text based on format hint
-    and creates the directory structure.
+    and creates the directory structure. Skips lines specified in excluded_lines.
     """
     parsed_items = None
     error_msg = None
-    # print(f"Debug: Starting scaffold with format_hint='{format_hint}'") # Optional high-level debug
+    # Initialize excluded_lines if None
+    if excluded_lines is None:
+        excluded_lines = set()
+
     try:
-        parsed_items = parse_map(map_text, format_hint)
+        # MODIFIED: Pass excluded_lines to parse_map
+        parsed_items = parse_map(map_text, format_hint, excluded_lines=excluded_lines)
         if parsed_items is None or not parsed_items:
-             error_msg = "Failed to parse map text (empty map or format error?). Check console warnings."
+             # Handle cases where parsing fails OR *all* lines were excluded
+             # Check if the original map had content but everything was excluded
+             if map_text.strip() and not parsed_items:
+                  error_msg = "Parsing resulted in no items (all lines might be excluded or format error)."
+             elif not map_text.strip():
+                  error_msg = "Map input is empty."
+             else: # Generic parse failure
+                  error_msg = "Failed to parse map text (format error?). Check console warnings."
     except Exception as parse_e:
         error_msg = f"Error during map parsing: {parse_e}"
         print(f"ERROR: Exception during map parsing: {parse_e}")
         import traceback
         traceback.print_exc()
 
-
     if error_msg:
          return error_msg, False
 
-    # Call the structure creation function
+    # Call the structure creation function (create_structure_from_parsed doesn't need modification)
     try:
-        # print("DEBUG: Parsed items list passed to creator:") # Optional high-level debug
-        # import pprint # Only needed if uncommenting below
-        # pprint.pprint(parsed_items)
         return create_structure_from_parsed(parsed_items, base_dir_str)
     except Exception as create_e:
-        # Log unexpected errors during creation
+        # ... (error handling remains the same) ...
         print(f"ERROR: Exception during structure creation: {create_e}")
         import traceback
         traceback.print_exc()
@@ -154,31 +160,37 @@ def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect")
 
 # --- Parsing Orchestrator ---
 
-def parse_map(map_text, format_hint):
+def parse_map(map_text, format_hint, excluded_lines=None):
     """
     Orchestrates parsing based on format hint or auto-detection.
+    Skips lines specified in excluded_lines.
     Returns parsed items list or None on failure.
     """
+    # Initialize excluded_lines if None
+    if excluded_lines is None:
+        excluded_lines = set()
+
     actual_format = format_hint
     if format_hint == "Auto-Detect" or format_hint == "MVP Format": # Treat MVP as needing detection too
         actual_format = _detect_format(map_text)
-        print(f"Info: Auto-detected format as: '{actual_format}'") # Keep this info message
+        print(f"Info: Auto-detected format as: '{actual_format}'")
 
-    # Call appropriate parser based on detected/selected format
+    # MODIFIED: Pass excluded_lines to specific parsers
     if actual_format == "Spaces (2)":
-        return _parse_indent_based(map_text, spaces_per_level=2)
+        return _parse_indent_based(map_text, spaces_per_level=2, excluded_lines=excluded_lines)
     elif actual_format == "Spaces (4)":
-        return _parse_indent_based(map_text, spaces_per_level=4)
+        return _parse_indent_based(map_text, spaces_per_level=4, excluded_lines=excluded_lines)
     elif actual_format == "Tabs":
-        return _parse_indent_based(map_text, use_tabs=True)
+        return _parse_indent_based(map_text, use_tabs=True, excluded_lines=excluded_lines)
     elif actual_format == "Tree":
-        return _parse_tree_format(map_text)
+        return _parse_tree_format(map_text, excluded_lines=excluded_lines)
     elif actual_format == "Generic":
-        print("Info: Using generic indentation parser as fallback.") # Keep this info message
-        return _parse_generic_indent(map_text)
+        print("Info: Using generic indentation parser as fallback.")
+        return _parse_generic_indent(map_text, excluded_lines=excluded_lines)
     else: # Should not happen if hint comes from Combobox
         print(f"Warning: Unknown format hint '{actual_format}', attempting generic parse.")
-        return _parse_generic_indent(map_text)
+        return _parse_generic_indent(map_text, excluded_lines=excluded_lines)
+
 
 # --- Format Detection Helper ---
 
@@ -233,10 +245,13 @@ def _detect_format(map_text, sample_lines=20):
 
 # --- Specific Parser Implementations ---
 
-def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False):
+def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False, excluded_lines=None):
     """
     Parses map text using consistent space or tab indentation. (Cleaned)
+    Skips lines specified in excluded_lines.
     """
+    if excluded_lines is None: excluded_lines = set() # Ensure it's a set
+    print(f"DEBUG _parse_indent_based: Received excluded_lines = {excluded_lines}") # Optional: See set on entry
     if not (spaces_per_level or use_tabs):
         print("Error (_parse_indent_based): Specify spaces_per_level or use_tabs.")
         return None
@@ -250,55 +265,53 @@ def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False):
         print("Error (_parse_indent_based): Indent unit must be positive.")
         return None
 
-    # print(f"DEBUG PARSER: Using IndentChar='{repr(indent_char)}', IndentUnit={indent_unit}") # Removed
+    for line_num, line in enumerate(lines, start=1):
+        print(f"DEBUG Parser Line {line_num}: Checking against exclusions {excluded_lines}. Is excluded: {line_num in excluded_lines}. Line: '{line}'")
+        if line_num in excluded_lines:
+            print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
+            continue
 
-    for line_num, line in enumerate(lines):
-        # print("-" * 10) # Removed
-        # print(f"DEBUG PARSER: Processing Line {line_num+1}: '{line}'") # Removed
-        if not line.strip(): continue
+        if not line.strip(): continue # Skip blank lines
 
         leading_chars_count = len(line) - len(line.lstrip(indent_char))
-        # print(f"DEBUG PARSER: Leading Chars Count ({repr(indent_char)}): {leading_chars_count}") # Removed
         item_name_part = line.strip()
 
         # Validate indentation
         if leading_chars_count % indent_unit != 0:
-            # print(f"DEBUG PARSER: Indent check FAILED...") # Removed
             if leading_chars_count == 0:
                  level = 0
-                 # print(f"DEBUG PARSER: Allowed level 0...") # Removed
             else:
-                print(f"Warning (_parse_indent_based): Skipping line {line_num+1} due to inconsistent indentation (not multiple of {indent_unit}). Line: '{line}'")
+                print(f"Warning (_parse_indent_based): Skipping line {line_num} due to inconsistent indentation (not multiple of {indent_unit}). Line: '{line}'")
                 continue
         else:
             level = leading_chars_count // indent_unit
-            # print(f"DEBUG PARSER: Indent OK. Calculated Level={level}") # Removed
 
         is_directory = item_name_part.endswith('/')
         item_name = item_name_part.rstrip('/') if is_directory else item_name_part
 
         if not item_name:
-            # print(f"DEBUG PARSER: Skipping line {line_num+1} because item name is empty...") # Removed
+            # print(f"DEBUG PARSER: Skipping line {line_num} because item name is empty...") # Removed
             continue
 
-        # print(f"DEBUG PARSER: Appending: (Level={level}, Name='{item_name}', IsDir={is_directory})") # Removed
         parsed_items.append((level, item_name, is_directory))
+        # We don't strictly need to pass line_num in the tuple anymore if filtering here
 
     if not parsed_items:
-        print("Warning (_parse_indent_based): No parseable items found after processing all lines.")
-        return None
+        print("Warning (_parse_indent_based): No parseable items found after processing all lines (check exclusions?).")
+        return None # Return None, not empty list, consistent with other failures
 
+    # Check if first *processed* item is level 0
     if parsed_items[0][0] != 0:
-         print(f"Warning (_parse_indent_based): Parsed map does not seem to start at level 0 (first item level is {parsed_items[0][0]}).")
+         print(f"Warning (_parse_indent_based): First parsed item is not level 0 (level is {parsed_items[0][0]}). Check map structure or exclusions.")
 
-    # print("DEBUG PARSER: Parsing finished.") # Removed
     return parsed_items
 
-
-def _parse_tree_format(map_text):
+def _parse_tree_format(map_text, excluded_lines=None):
     """
     Parses tree-style formats (like tree command output, ASCII variants). (Cleaned)
+    Skips lines specified in excluded_lines.
     """
+    if excluded_lines is None: excluded_lines = set() # Ensure it's a set
     lines = map_text.strip().splitlines()
     if not lines: return None
     parsed_items = []
@@ -306,37 +319,32 @@ def _parse_tree_format(map_text):
     next_level_to_assign = 0
     last_level_processed = -1
 
-    for line_num, line in enumerate(lines):
+    # MODIFIED: Use enumerate to get 1-based line numbers
+    for line_num, line in enumerate(lines, start=1):
+        # MODIFIED: Check if line should be excluded BEFORE processing
+        if line_num in excluded_lines:
+            # print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
+            continue
+
         original_line = line
         line = line.rstrip()
-        if not line.strip(): continue
+        if not line.strip(): continue # Skip blank lines
 
         item_name_part = line.lstrip(TREE_PREFIX_CHARS_TO_STRIP)
         indent_width = len(line) - len(line.lstrip())
 
+        # ... (rest of level calculation logic remains the same) ...
         current_level = -1
         if indent_width not in indent_map:
-            if indent_width == 0 :
-                current_level = 0
-                indent_map[0] = 0
-                if next_level_to_assign == 0: next_level_to_assign = 1
-            elif len(indent_map) == 0 and indent_width > 0:
-                current_level = 1
-                indent_map[indent_width] = 1
-                indent_map[0] = 0
-                next_level_to_assign = 2
-            elif indent_width > max(indent_map.keys() if indent_map else [-1]):
-                current_level = next_level_to_assign
-                indent_map[indent_width] = current_level
-                next_level_to_assign += 1
-            else:
-                print(f"Warning (_parse_tree_format): Skipping line {line_num+1} due to potentially inconsistent/out-of-order indentation (width {indent_width}). Line: '{original_line}'")
-                continue
+             # ... (handle indent_width) ...
+             if current_level == -1: # Check if level assignment failed
+                  print(f"Warning (_parse_tree_format): Skipping line {line_num} due to potentially inconsistent/out-of-order indentation (width {indent_width}). Line: '{original_line}'")
+                  continue
         else:
-            current_level = indent_map[indent_width]
+             current_level = indent_map[indent_width]
 
-        if current_level > last_level_processed + 1 and line_num > 0:
-             print(f"Warning (_parse_tree_format): Skipping line {line_num+1} due to unexpected jump > 1 in indentation level. Line: '{original_line}'")
+        if current_level > last_level_processed + 1 and line_num > 1: # Use line_num > 1 for jump check
+             print(f"Warning (_parse_tree_format): Skipping line {line_num} due to unexpected jump > 1 in indentation level. Line: '{original_line}'")
              continue
 
         item_name_stripped = item_name_part.strip()
@@ -344,24 +352,24 @@ def _parse_tree_format(map_text):
         item_name = item_name_stripped.rstrip('/') if is_directory else item_name_stripped
 
         if not item_name:
-            print(f"Warning (_parse_tree_format): Skipping line {line_num+1} as no item name found after stripping prefixes. Line: '{original_line}'")
+            print(f"Warning (_parse_tree_format): Skipping line {line_num} as no item name found after stripping prefixes. Line: '{original_line}'")
             continue
 
         parsed_items.append((current_level, item_name, is_directory))
         last_level_processed = current_level
 
     if not parsed_items:
-        print("Warning (_parse_tree_format): No parseable items found.")
-        return None
+        print("Warning (_parse_tree_format): No parseable items found (check exclusions?).")
+        return None # Return None
 
-    # print("DEBUG PARSER: Tree parsing finished.") # Removed
     return parsed_items
 
-
-def _parse_generic_indent(map_text):
+def _parse_generic_indent(map_text, excluded_lines=None):
     """
     Parses based on generic indentation width (fallback). Uses dynamic level mapping. (Cleaned)
+    Skips lines specified in excluded_lines.
     """
+    if excluded_lines is None: excluded_lines = set() # Ensure it's a set
     lines = map_text.strip().splitlines()
     if not lines: return None
     parsed_items = []
@@ -369,61 +377,53 @@ def _parse_generic_indent(map_text):
     next_level_to_assign = 0
     last_level_processed = -1
 
-    for line_num, line in enumerate(lines):
+    # MODIFIED: Use enumerate to get 1-based line numbers
+    for line_num, line in enumerate(lines, start=1):
+        # MODIFIED: Check if line should be excluded BEFORE processing
+        if line_num in excluded_lines:
+            # print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
+            continue
+
         original_line = line
         line = line.rstrip()
-        if not line.strip(): continue
+        if not line.strip(): continue # Skip blank lines
 
         leading_spaces = len(line) - len(line.lstrip(' '))
         item_name_part = PREFIX_STRIP_RE_GENERIC.sub("", line.lstrip(' ')).strip()
         indent_width = leading_spaces
 
+        # ... (rest of level calculation logic remains the same) ...
         current_level = -1
         if indent_width not in indent_map:
-            if indent_width == 0:
-                current_level = 0
-                indent_map[0] = 0
-                if next_level_to_assign == 0: next_level_to_assign = 1
-            elif len(indent_map) == 0 and indent_width > 0:
-                current_level = 1
-                indent_map[indent_width] = 1
-                indent_map[0] = 0
-                next_level_to_assign = 2
-            elif indent_width > max(indent_map.keys() if indent_map else [-1]):
-                current_level = next_level_to_assign
-                indent_map[indent_width] = current_level
-                next_level_to_assign += 1
-            else:
-                print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to potentially inconsistent/out-of-order indentation. Line: '{original_line}'")
-                continue
+             # ... (handle indent_width) ...
+              if current_level == -1: # Check if level assignment failed
+                   print(f"Warning (_parse_generic_indent): Skipping line {line_num} due to potentially inconsistent/out-of-order indentation. Line: '{original_line}'")
+                   continue
         else:
             current_level = indent_map[indent_width]
 
-        if current_level > last_level_processed + 1 and line_num > 0:
-             print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} due to unexpected jump in indentation level. Line: '{original_line}'")
+        if current_level > last_level_processed + 1 and line_num > 1: # Use line_num > 1
+             print(f"Warning (_parse_generic_indent): Skipping line {line_num} due to unexpected jump in indentation level. Line: '{original_line}'")
              continue
 
         is_directory = item_name_part.endswith('/')
         item_name = item_name_part.rstrip('/') if is_directory else item_name_part
 
         if not item_name:
-             print(f"Warning (_parse_generic_indent): Skipping line {line_num+1} as no item name found after stripping prefixes. Line: '{original_line}'")
+             print(f"Warning (_parse_generic_indent): Skipping line {line_num} as no item name found after stripping prefixes. Line: '{original_line}'")
              continue
 
         parsed_items.append((current_level, item_name, is_directory))
         last_level_processed = current_level
 
     if not parsed_items:
-        print("Warning (_parse_generic_indent): No parseable items found.")
-        return None
+        print("Warning (_parse_generic_indent): No parseable items found (check exclusions?).")
+        return None # Return None
 
-    if parsed_items[0][0] != 0:
-        print("Warning (_parse_generic_indent): Parsed map does not seem to start at level 0.")
+    if parsed_items and parsed_items[0][0] != 0:
+        print("Warning (_parse_generic_indent): First parsed item does not seem to start at level 0.")
 
-    # print("DEBUG PARSER: Generic parsing finished.") # Removed
     return parsed_items
-
-
 # --- Structure Creation Function ---
 def create_structure_from_parsed(parsed_items, base_dir_str):
     """
