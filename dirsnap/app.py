@@ -1,4 +1,4 @@
-# dirmapper/app.py
+# dirsnap/app.py
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -33,6 +33,9 @@ except ImportError:
         def get_config_path():
             print("FATAL: get_config_path is not available.")
             return None # Or raise an exception
+        
+# --- Application Constants ---
+    APP_VERSION = "3.1.0" # Example version
 
 # --- Tooltip Helper Class ---
 class Tooltip:
@@ -91,8 +94,8 @@ class Tooltip:
             except tk.TclError: # Handle case where window might already be destroyed
                 pass
 
-# --- DirMapperApp Class ---
-class DirMapperApp(tk.Tk):
+# --- DirSnapApp Class ---
+class DirSnapApp(tk.Tk):
     # --- Constants ---
     TAG_STRIKETHROUGH = "strikethrough"
     QUEUE_MSG_PROGRESS = "progress"
@@ -121,6 +124,31 @@ class DirMapperApp(tk.Tk):
 
         self.title("Directory Mapper & Scaffolder")
         self.minsize(550, 450)
+
+         # --- Create Menu Bar --- 
+        self.menu_bar = tk.Menu(self)
+
+        # --- File Menu ---
+        self.file_menu = tk.Menu(self.menu_bar, tearoff=0)
+        # Add other file-related commands here later if needed (e.g., New Window?)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self._on_closing)
+        self.menu_bar.add_cascade(label="File", menu=self.file_menu) # Add File menu to bar
+
+        # --- Edit Menu ---
+        self.edit_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.edit_menu.add_command(label="Preferences...", command=self._open_config_file) # Renamed, linked to same function
+        # Add other edit commands later if needed (e.g., Copy, Paste for text areas?)
+        self.menu_bar.add_cascade(label="Edit", menu=self.edit_menu) # Add Edit menu to bar
+        
+        # --- Help Menu ---
+        self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.help_menu.add_command(label="View README", command=self._view_readme)
+        self.help_menu.add_command(label="About DirSnap", command=self._show_about)
+        self.menu_bar.add_cascade(label="Help", menu=self.help_menu)
+        
+        # Configure the root window to use the menu bar
+        self.config(menu=self.menu_bar)
 
         self._configure_styles() # Configure styles in a helper method
 
@@ -299,6 +327,49 @@ class DirMapperApp(tk.Tk):
         print("Info: Closing application, saving configuration...")
         self._save_config()
         self.destroy() # Close the Tkinter window/application
+
+    def _open_config_file(self):
+        """Opens the config.json file in the default system editor."""
+        config_path = get_config_path() # From utils.py
+        if not config_path:
+            messagebox.showerror("Error", "Could not determine the configuration file path.", parent=self)
+            return
+
+        if not config_path.is_file():
+            # Offer to create it by saving current defaults?
+            if messagebox.askyesno("Config File Not Found",
+                                   f"The configuration file does not exist yet:\n{config_path}\n\n"
+                                   "Do you want to create it now with default settings?",
+                                   parent=self):
+                self._save_config() # Save current (likely default) settings
+                # Check again if save was successful
+                if not config_path.is_file():
+                     messagebox.showerror("Error", f"Failed to create configuration file:\n{config_path}", parent=self)
+                     return
+            else:
+                 return # User chose not to create it
+
+        # Open the file using platform-specific methods
+        path_str = str(config_path)
+        try:
+            print(f"Info: Attempting to open config file: {path_str}")
+            if sys.platform == "win32":
+                os.startfile(path_str)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(['open', path_str], check=True)
+            else: # Linux and other POSIX variants
+                # Use xdg-open for better desktop environment integration
+                subprocess.run(['xdg-open', path_str], check=True)
+            # Optional: Add status update? Maybe not necessary for opening a file.
+        except FileNotFoundError:
+             err_msg = f"Could not find the command (e.g., 'open' or 'xdg-open') needed to open the file on this system ({sys.platform})."
+             messagebox.showerror("Error Opening File", err_msg, parent=self)
+        except subprocess.CalledProcessError as e:
+              err_msg = f"The command to open the file failed:\n{e}"
+              messagebox.showerror("Error Opening File", err_msg, parent=self)
+        except Exception as e:
+            err_msg = f"An unexpected error occurred while trying to open the file:\n{config_path}\n\n{e}"
+            messagebox.showerror("Error Opening File", err_msg, parent=self)
 
     # --- Widget Creation Methods ---
 
@@ -1320,6 +1391,65 @@ class DirMapperApp(tk.Tk):
             messagebox.showerror("Error opening folder", err_msg)
             self._update_status(f"Error opening folder: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
 
+# filename: dirmapper/app.py
+    # ... (other methods) ...
+
+    # --- Help Menu Methods ---
+
+    def _show_about(self):
+        """Displays the About dialog."""
+        messagebox.showinfo(
+            "About DirSnap",
+            f"Directory Mapper & Scaffolder\n\n"
+            f"Version: {APP_VERSION}\n\n"
+            "A utility to create directory maps and scaffold structures from them.\n\n"
+            "Asa V. Schaeffer & Gemini Advanced 2.5 Pro (experimental)",
+            parent=self
+        )
+
+    def _view_readme(self):
+        """Attempts to open the README.md file."""
+        try:
+            # Assume README.md is in the parent directory of the script's location
+            # This might need adjustment depending on packaging/installation structure
+            script_dir = Path(__file__).parent
+            readme_path = script_dir.parent / "README.md" # Go up one level from dirmapper/
+
+            if not readme_path.is_file():
+                 # Try finding it in the current working directory as a fallback
+                 readme_path_cwd = Path.cwd() / "README.md"
+                 if readme_path_cwd.is_file():
+                     readme_path = readme_path_cwd
+                 else:
+                     messagebox.showwarning("README Not Found",
+                                           f"Could not find README.md at expected locations:\n"
+                                           f"- {readme_path}\n"
+                                           f"- {readme_path_cwd}",
+                                           parent=self)
+                     return
+
+            # Open the file using platform-specific methods (similar to _open_config_file)
+            path_str = str(readme_path.resolve())
+            print(f"Info: Attempting to open README file: {path_str}")
+            if sys.platform == "win32":
+                os.startfile(path_str)
+            elif sys.platform == "darwin": # macOS
+                subprocess.run(['open', path_str], check=True)
+            else: # Linux and other POSIX variants
+                subprocess.run(['xdg-open', path_str], check=True)
+
+        except FileNotFoundError:
+             err_msg = f"Could not find the command (e.g., 'open' or 'xdg-open') needed to open the file on this system ({sys.platform})."
+             messagebox.showerror("Error Opening File", err_msg, parent=self)
+        except subprocess.CalledProcessError as e:
+              err_msg = f"The command to open the file failed:\n{e}"
+              messagebox.showerror("Error Opening File", err_msg, parent=self)
+        except Exception as e:
+            err_msg = f"An unexpected error occurred while trying to open the README file:\n{e}"
+            messagebox.showerror("Error Opening File", err_msg, parent=self)
+
+    # ... (Rest of the class) ...
+
 
 # --- Main execution block for testing the UI directly ---
 if __name__ == '__main__':
@@ -1331,7 +1461,7 @@ if __name__ == '__main__':
     test_scaffold_path = str(Path('./_ui_test_scaffold_here').resolve())
     Path(test_scaffold_path).mkdir(exist_ok=True) # Ensure dir exists
     print(f"Testing 'scaffold_here' mode with path: {test_scaffold_path}")
-    app = DirMapperApp(initial_path=test_scaffold_path, initial_mode='scaffold_here')
+    app = DirSnapApp(initial_path=test_scaffold_path, initial_mode='scaffold_here')
 
     app.mainloop()
 

@@ -1,21 +1,21 @@
 """main.py: The main entry point script for the application.
 
     Parse command-line arguments (like an initial path from the right-click context menu).
-    Import the main application class from the dirmapper package.
+    Import the main application class from the DirSnap package.
     Instantiate and run the application's GUI loop."""
 # main.py
 import sys
 import os
 from pathlib import Path
 
-# Ensure the 'dirmapper' package directory is findable if running main.py directly
+# Ensure the 'DirSnap' package directory is findable if running main.py directly
 # This might be needed depending on how the project is structured and run
 script_dir = Path(__file__).parent
-package_dir = script_dir / 'dirmapper'
+package_dir = script_dir / 'DirSnap'
 if str(package_dir) not in sys.path:
      sys.path.insert(0, str(script_dir)) # Add project root to path
 
-from dirmapper.app import DirMapperApp
+from dirsnap.app import DirSnapApp
 
 if __name__ == "__main__":
     initial_path_str = None
@@ -41,11 +41,11 @@ if __name__ == "__main__":
 
     # Instantiate and run the app
     try:
-        app = DirMapperApp(initial_path=initial_path_str, initial_mode=initial_mode)
+        app = DirSnapApp(initial_path=initial_path_str, initial_mode=initial_mode)
         app.mainloop()
     except Exception as e:
         # Basic error handling if app fails to initialize
-        print(f"FATAL ERROR: Could not launch DirMapperApp.")
+        print(f"FATAL ERROR: Could not launch DirSnapApp.")
         print(e)
         # In a real app, might use a simple Tk messagebox for errors here too
         input("Press Enter to exit.") # Keep console open to see error
