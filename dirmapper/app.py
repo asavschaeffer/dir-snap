@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from tkinter import font as tkFont # Import font submodule
 import pyperclip # Dependency: pip install pyperclip
+import json
 from pathlib import Path
 import sys
 import os
@@ -18,10 +19,20 @@ import time # Keep for potential future debug/sleep
 # Use relative import to access logic.py within the same package
 try:
     from . import logic
+    from .utils import get_config_path
 except ImportError:
     # Fallback for running app.py directly for testing UI (not recommended for final)
     print("Warning: Running app.py directly. Attempting to import logic module from current directory.")
     import logic
+    # Attempt to import utils directly if running standalone
+    try:
+        from utils import get_config_path
+    except ImportError:
+        print("ERROR: Could not import get_config_path. Config loading/saving will fail.")
+        # Define a dummy function to avoid NameError later, but show error
+        def get_config_path():
+            print("FATAL: get_config_path is not available.")
+            return None # Or raise an exception
 
 # --- Tooltip Helper Class ---
 class Tooltip:
@@ -93,6 +104,10 @@ class DirMapperApp(tk.Tk):
     def __init__(self, initial_path=None, initial_mode='snapshot'):
         super().__init__()
 
+         # --- Initialize attributes ---
+        self.user_default_ignores = [] # To store ignores loaded from config
+        self.last_scaffold_path = None # Already exists
+
         # Queues for inter-thread communication
         self.scaffold_queue = queue.Queue()
         self.snapshot_queue = queue.Queue()
@@ -117,11 +132,17 @@ class DirMapperApp(tk.Tk):
         self.notebook.add(self.scaffold_frame, text='Scaffold (Map -> Dir)')
         self.notebook.pack(expand=True, fill='both', padx=5, pady=5)
 
-        # --- Populate Tabs ---
+        # --- Create Widgets ---
         self._create_snapshot_widgets()
-        self._layout_snapshot_widgets()
         self._create_scaffold_widgets()
+
+        self._load_config()
+
+        # --- Layout Widgets ---
+        self._layout_snapshot_widgets()
         self._layout_scaffold_widgets()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         # Handle initial state after UI is drawn
         self.after(50, self._handle_initial_state)
@@ -145,6 +166,139 @@ class DirMapperApp(tk.Tk):
         style.map('ClearButton.TButton',
                   foreground=[('active', text_color), ('pressed', text_color)]
                   )
+
+# --- Configuration Methods ---
+
+    def _load_config(self):
+            """Loads settings from the configuration file."""
+            config_path = get_config_path()
+            if not config_path or not config_path.exists():
+                print("Info: Configuration file not found. Using default settings.")
+                # Apply default window size if needed (optional)
+                # self.geometry("550x450") # Example default size
+                return # Nothing to load
+
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"Error: Failed to load or parse config file '{config_path}': {e}")
+                messagebox.showwarning("Config Load Error",
+                                    f"Could not load configuration file.\nUsing default settings.\n\nError: {e}",
+                                    parent=self) # Show parent to appear over main window
+                # Apply default window size if needed (optional)
+                # self.geometry("550x450") # Example default size
+                return
+
+            # Apply settings safely using .get() with defaults
+            # Window Geometry
+            window_conf = config_data.get("window", {})
+            width = window_conf.get("width", 550)
+            height = window_conf.get("height", 450)
+            x_pos = window_conf.get("x_pos")
+            y_pos = window_conf.get("y_pos")
+            if x_pos is not None and y_pos is not None:
+                self.geometry(f"{width}x{height}+{x_pos}+{y_pos}")
+            else:
+                self.geometry(f"{width}x{height}") # Default position
+
+            # Snapshot Settings
+            snapshot_conf = config_data.get("snapshot", {})
+            last_source = snapshot_conf.get("last_source_dir")
+            # Only set if not launched with a specific path context
+            if last_source and not self.initial_path:
+                self.snapshot_dir_var.set(last_source)
+
+            self.snapshot_auto_copy_var.set(snapshot_conf.get("auto_copy", False))
+            # Optional: Load last session's custom ignores
+            # last_custom_ignores = snapshot_conf.get("last_custom_ignores", "")
+            # self.snapshot_ignore_var.set(last_custom_ignores) # Uncomment if desired
+
+            # Scaffold Settings
+            scaffold_conf = config_data.get("scaffold", {})
+            last_base = scaffold_conf.get("last_base_dir")
+            # Only set if not launched with a specific path context for scaffold_here
+            if last_base and not (self.initial_path and self.initial_mode == 'scaffold_here'):
+                self.scaffold_base_dir_var.set(last_base)
+
+            self.scaffold_format_var.set(scaffold_conf.get("last_format", "Auto-Detect"))
+
+            # User Default Ignores (Store them for use in logic.py later)
+            loaded_ignores = config_data.get("user_default_ignores", [])
+            if isinstance(loaded_ignores, list):
+                self.user_default_ignores = loaded_ignores
+            else:
+                print(f"Warning: 'user_default_ignores' in config is not a list. Ignoring. Value: {loaded_ignores}")
+                self.user_default_ignores = [] # Reset to default empty list
+
+            print(f"Info: Configuration loaded successfully from {config_path}")
+            # Optional: Update the snapshot default ignores label/tooltip here if desired
+            # self._update_snapshot_ignores_display() # Example call to a new method
+
+    def _save_config(self):
+        """Saves current settings to the configuration file."""
+        config_path = get_config_path()
+        if not config_path:
+             print("Error: Could not determine config path. Settings not saved.")
+             return
+
+        settings = {
+            "version": 1, # Increment if structure changes significantly later
+            "window": {},
+            "snapshot": {},
+            "scaffold": {},
+            "user_default_ignores": self.user_default_ignores # Assumes this list is managed somehow
+        }
+
+        # Get Window Geometry
+        try:
+             # Parse geometry string like "600x500+100+100"
+             geo_string = self.geometry()
+             parts = geo_string.split('+')
+             size_parts = parts[0].split('x')
+             settings["window"]["width"] = int(size_parts[0])
+             settings["window"]["height"] = int(size_parts[1])
+             # Check if position is included
+             if len(parts) == 3:
+                  settings["window"]["x_pos"] = int(parts[1])
+                  settings["window"]["y_pos"] = int(parts[2])
+             else: # Handle case where window might be unmapped or position unavailable
+                 settings["window"]["x_pos"] = None # Or store previous valid position
+                 settings["window"]["y_pos"] = None
+        except (tk.TclError, ValueError, IndexError) as e:
+             print(f"Warning: Could not get or parse window geometry: {e}. Size/position not saved.")
+             # Use potentially loaded values or defaults if parsing fails
+             settings["window"] = self._load_config().get("window", {"width": 550, "height": 450}) # Example fallback
+
+
+        # Get Settings from UI Variables
+        settings["snapshot"]["last_source_dir"] = self.snapshot_dir_var.get()
+        settings["snapshot"]["auto_copy"] = self.snapshot_auto_copy_var.get()
+        # Optional: Save last session's custom ignores
+        # settings["snapshot"]["last_custom_ignores"] = self.snapshot_ignore_var.get()
+
+        settings["scaffold"]["last_base_dir"] = self.scaffold_base_dir_var.get()
+        settings["scaffold"]["last_format"] = self.scaffold_format_var.get()
+
+        # Write to file
+        try:
+             # Ensure directory exists (get_config_path should have done this, but double-check)
+             config_path.parent.mkdir(parents=True, exist_ok=True)
+             with open(config_path, 'w', encoding='utf-8') as f:
+                  json.dump(settings, f, indent=4) # Use indent for readability
+             print(f"Info: Configuration saved successfully to {config_path}")
+        except (OSError, TypeError) as e:
+             print(f"Error: Failed to save config file '{config_path}': {e}")
+             # Optionally show a messagebox, but maybe annoying on close
+             # messagebox.showerror("Config Save Error",
+             #                     f"Could not save configuration file.\n\nError: {e}",
+             #                     parent=self)
+
+    def _on_closing(self):
+        """Handles window closing: saves config and exits."""
+        print("Info: Closing application, saving configuration...")
+        self._save_config()
+        self.destroy() # Close the Tkinter window/application
 
     # --- Widget Creation Methods ---
 
@@ -893,7 +1047,7 @@ class DirMapperApp(tk.Tk):
         # Start background task
         self._start_background_task(
             target_func=self._snapshot_thread_target,
-            args=(source_dir, custom_ignores),
+            args=(source_dir, custom_ignores, self.user_default_ignores),
             queue_obj=self.snapshot_queue,
             button_widget=self.snapshot_regenerate_button,
             progressbar_widget=self.snapshot_progress_bar,
@@ -968,10 +1122,14 @@ class DirMapperApp(tk.Tk):
 
 
     # --- Thread Target Functions ---
-    def _snapshot_thread_target(self, source_dir, custom_ignores, q):
+    def _snapshot_thread_target(self, source_dir, custom_ignores, user_ignores, q):
         """Calls the snapshot logic and puts result in queue."""
         try:
-            map_result = logic.create_directory_snapshot(source_dir, custom_ignores)
+            map_result = logic.create_directory_snapshot(
+                source_dir,
+                custom_ignore_patterns=custom_ignores,
+                user_default_ignores=user_ignores
+            )
             success = not map_result.startswith("Error:")
             q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'map_text': map_result})
         except Exception as e:

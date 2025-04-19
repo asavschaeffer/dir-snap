@@ -23,17 +23,15 @@ TREE_PREFIX_RE = re.compile(r"^\s*([││]|├──|└──)")
 
 # --- Snapshot Function ---
 
-def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
+def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None,user_default_ignores=None):
     """
-    Generates an indented text map of a directory structure (MVP format).
-
-    Builds an intermediate tree using os.walk for efficiency and pruning,
-    then generates the map string from the tree for correct indentation.
-    Uses DEFAULT_SNAPSHOT_SPACES for indentation and trailing '/' for directories.
+    Generates an indented text map of a directory structure.
+    Merges built-in, user-defined default, and custom session ignores.
 
     Args:
         root_dir_str (str): The path to the root directory to map.
-        custom_ignore_patterns (set, optional): A set of custom patterns to ignore.
+        custom_ignore_patterns (set, optional): A set of custom patterns for this specific run.
+        user_default_ignores (list or set, optional): User-defined patterns to always ignore.
 
     Returns:
         str: The formatted directory map string, or an error message.
@@ -43,6 +41,9 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
         return f"Error: Path is not a valid directory: {root_dir_str}"
 
     ignore_set = DEFAULT_IGNORE_PATTERNS.copy()
+    if user_default_ignores:
+        # Ensure it's a set and update
+        ignore_set.update(set(user_default_ignores))
     if custom_ignore_patterns:
         ignore_set.update(custom_ignore_patterns)
 
