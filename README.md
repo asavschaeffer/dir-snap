@@ -13,29 +13,33 @@ This tool has two main functions:
 
 The core functionality is complete and working. Several Quality-of-Life features have been added. The next steps involve adding persistence (config file), more snapshot flexibility, and preparing for distribution (packaging/installer).
 
-## **Features Implemented**
+## Features Implemented
 
 - **Snapshot:**
   - Generates a directory map using 2-space indentation.
   - Adds a trailing `/` to directory names in the map.
-  - Includes built-in default ignore patterns (e.g., .git, node_modules, **pycache**).
-  - Allows adding custom ignore patterns (comma-separated) via GUI.
+  - Includes built-in default ignore patterns (e.g., .git, node_modules, \_\_pycache\_\_).
+  - Allows adding custom ignore patterns (comma-separated) per run via GUI.
+  - **NEW:** Runs map generation in a background thread to keep UI responsive.
+  - **NEW:** Displays an indeterminate progress bar during map generation.
   - **NEW:** Interactive map exclusion:
     - Clicking a line in the generated map toggles a visual strikethrough.
     - Clicking a directory also toggles its children (cascading).
     - Toggling adds/removes the item(s) from the Custom Ignores field for transparency and persistence.
   - Buttons to manually copy map or save it to a .txt file.
-  - **NEW:** Copy to Clipboard respects exclusions from _both_ struck-through lines _and_ the Custom Ignores field.
+  - Copy to Clipboard respects exclusions from _both_ struck-through lines _and_ the Custom Ignores field.
   - Option to automatically copy the map (with exclusions) to the clipboard on generation or after clicking to exclude.
   - Status feedback label.
   - Informational label showing key default ignores.
 - **Scaffold:**
   - Parses multiple map formats: Consistent Spaces (2 or 4), Tabs, Tree-like prefixes (Unicode/ASCII), Generic Indentation (fallback).
   - Auto-detects input format, with manual override via dropdown.
+  - **NEW:** Runs structure creation in a background thread to keep UI responsive.
+  - **NEW:** Displays a determinate progress bar during structure creation.
   - **NEW:** Interactive map exclusion:
     - Clicking a line in the input map toggles a visual strikethrough.
     - Clicking a directory also toggles its children (cascading visual only).
-  - Creates the directory structure and empty files within a selected base directory, **skipping items corresponding to struck-through lines (including children)**.
+  - Creates the directory structure and empty files within a selected base directory, skipping items corresponding to struck-through lines (including children).
   - Allows pasting map text from clipboard or loading from a .txt file.
   - Status feedback label with success/error/ready states.
   - "Open Output Folder" button appears on success to open the created directory (cross-platform).
@@ -46,8 +50,9 @@ The core functionality is complete and working. Several Quality-of-Life features
   - "Clear Map" button for scaffold input.
   - Tooltips for key controls.
   - Status bars use color coding (Red/Green/Default).
+  - **NEW:** Progress bars provide visual feedback for long operations.
 - **Context Handling:**
-  - Can be launched with a directory path (starts Snapshot mode, auto-generates).
+  - Can be launched with a directory path (starts Snapshot mode).
   - Can be launched with a file path (starts Scaffold mode, loads file).
   - Can be launched targeting a base directory for scaffolding ("Create Here" workflow - requires context menu setup).
 
@@ -101,7 +106,6 @@ The core functionality is complete and working. Several Quality-of-Life features
   - **Further UI/UX Refinements:** Minor layout/theme adjustments, improved error dialogs.
   - Refine "Open Folder" logic (error handling, platform edge cases).
 - **Future / Deferred Ideas:**
-  - Interactive Ignore Tree (Checkbox UI in Snapshot tab).
   - Browser Extension Integration.
   - Drag and Drop support for files/folders onto the UI.
   - Advanced Config (Sounds, UI Themes).

@@ -13,6 +13,7 @@ import shutil
 import re
 import threading
 import queue
+import time # Keep for potential future debug/sleep
 
 # Use relative import to access logic.py within the same package
 try:
@@ -47,7 +48,8 @@ class Tooltip:
         """Displays the tooltip window."""
         if self.tip_window or not self.text:
             return
-        
+
+        # Position near cursor
         x = self.widget.winfo_pointerx() + 15
         y = self.widget.winfo_pointery() + 10
 
@@ -80,11 +82,24 @@ class Tooltip:
 
 # --- DirMapperApp Class ---
 class DirMapperApp(tk.Tk):
+    # --- Constants ---
+    TAG_STRIKETHROUGH = "strikethrough"
+    QUEUE_MSG_PROGRESS = "progress"
+    QUEUE_MSG_RESULT = "result"
+    TAB_SNAPSHOT = "snapshot"
+    TAB_SCAFFOLD = "scaffold"
+    # --- End Constants ---
+
     def __init__(self, initial_path=None, initial_mode='snapshot'):
         super().__init__()
 
+        # Queues for inter-thread communication
         self.scaffold_queue = queue.Queue()
         self.snapshot_queue = queue.Queue()
+
+        # Store thread objects to check if they are alive
+        self.scaffold_thread = None
+        self.snapshot_thread = None
 
         self.initial_path = Path(initial_path) if initial_path else None
         self.initial_mode = initial_mode
@@ -92,39 +107,7 @@ class DirMapperApp(tk.Tk):
         self.title("Directory Mapper & Scaffolder")
         self.minsize(550, 450)
 
-        # --- Configure Custom TTK Style for Clear Button ---
-        style = ttk.Style(self)
-        try:
-            # Attempt to get Entry background color for seamless look
-            entry_bg = style.lookup('TEntry', 'fieldbackground')
-            # Use a slightly dimmer foreground for the 'x'
-            text_color = style.lookup('TLabel', 'foreground') # Get default text color
-            # You might need to experiment with system color names like 'SystemButtonFace', 'SystemWindow' as fallbacks
-            default_font = tkFont.nametofont("TkDefaultFont")
-            print(f"Debug: Found default font: {default_font.actual()}")
-            
-        except tk.TclError:
-            print("Warning: Could not look up theme colors, using fallback.")
-            entry_bg = 'SystemWindow' # Common fallback background
-            text_color = 'black'      # Default text color
-
-        # Modify style configuration in __init__ in dirmapper/app.py
-
-        # Define the custom style - Add borderwidth and relief
-        style.configure('ClearButton.TButton',
-                        foreground='grey',
-                        borderwidth=0,      # <<<--- ADD THIS
-                        relief='flat',      # <<<--- ADD THIS
-                        padding=0           # Keep padding minimal? Or maybe small like 1? Test 0.
-                        # NO background or focuscolor set yet
-                       )
-
-        # Optional: Map hover/active states (only change foreground)
-        style.map('ClearButton.TButton',
-                  foreground=[('active', text_color), ('pressed', text_color)]
-                  # Still no background map
-                  )
-        # --- End Style Configuration ---
+        self._configure_styles() # Configure styles in a helper method
 
         # --- Main UI Structure ---
         self.notebook = ttk.Notebook(self)
@@ -140,194 +123,208 @@ class DirMapperApp(tk.Tk):
         self._create_scaffold_widgets()
         self._layout_scaffold_widgets()
 
+        # Handle initial state after UI is drawn
         self.after(50, self._handle_initial_state)
+
+    def _configure_styles(self):
+        """Configure custom ttk styles."""
+        style = ttk.Style(self)
+        try:
+            text_color = style.lookup('TLabel', 'foreground')
+        except tk.TclError:
+            print("Warning: Could not look up theme colors for style config, using fallback.")
+            text_color = 'black'
+
+        # Style for clear buttons in Entries
+        style.configure('ClearButton.TButton',
+                        foreground='grey',
+                        borderwidth=0,
+                        relief='flat',
+                        padding=0
+                       )
+        style.map('ClearButton.TButton',
+                  foreground=[('active', text_color), ('pressed', text_color)]
+                  )
 
     # --- Widget Creation Methods ---
 
     def _create_snapshot_widgets(self):
         """Creates widgets for the Snapshot tab."""
+        frame = self.snapshot_frame # Use local variable for clarity
+
         # Labels
-        self.snapshot_dir_label = ttk.Label(self.snapshot_frame, text="Source Directory:")
-        self.snapshot_ignore_label = ttk.Label(self.snapshot_frame, text="Custom Ignores (comma-sep):")
+        ttk.Label(frame, text="Source Directory:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        ttk.Label(frame, text="Custom Ignores (comma-sep):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
+
         # Default Ignores Label
-        common_defaults = sorted(list(logic.DEFAULT_IGNORE_PATTERNS))[:4]
-        default_ignores_text = f"Ignoring defaults like: {', '.join(common_defaults)}, ..."
-        self.snapshot_default_ignores_label = ttk.Label(self.snapshot_frame, text=default_ignores_text, foreground="grey")
-        Tooltip(self.snapshot_default_ignores_label, "Also ignoring:\n" + "\n".join(sorted(list(logic.DEFAULT_IGNORE_PATTERNS)))) # Tooltip for full list
+        try:
+            common_defaults = sorted(list(logic.DEFAULT_IGNORE_PATTERNS))[:4]
+            default_ignores_text = f"Ignoring defaults like: {', '.join(common_defaults)}, ..."
+            default_tooltip = "Also ignoring:\n" + "\n".join(sorted(list(logic.DEFAULT_IGNORE_PATTERNS)))
+        except AttributeError: # Handle case where logic might not be imported correctly
+             common_defaults = ["N/A"]
+             default_ignores_text = "Ignoring default patterns..."
+             default_tooltip = "Default ignore patterns unavailable."
+
+        self.snapshot_default_ignores_label = ttk.Label(frame, text=default_ignores_text, foreground="grey")
+        self.snapshot_default_ignores_label.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=7, pady=(0, 5))
+        Tooltip(self.snapshot_default_ignores_label, default_tooltip)
 
         # Entries & Buttons
         self.snapshot_dir_var = tk.StringVar()
-        self.snapshot_dir_entry = ttk.Entry(self.snapshot_frame, textvariable=self.snapshot_dir_var, width=50)
-        self.snapshot_browse_button = ttk.Button(self.snapshot_frame, text="Browse...", command=self._browse_snapshot_dir)
-        self.snapshot_clear_dir_button = ttk.Button(self.snapshot_frame, text="X", width=2, command=lambda: self.snapshot_dir_var.set(''), style='ClearButton.TButton')
+        self.snapshot_dir_entry = ttk.Entry(frame, textvariable=self.snapshot_dir_var, width=50)
+        self.snapshot_browse_button = ttk.Button(frame, text="Browse...", command=self._browse_snapshot_dir)
+        self.snapshot_clear_dir_button = ttk.Button(frame, text="X", width=2, command=lambda: self.snapshot_dir_var.set(''), style='ClearButton.TButton')
+        Tooltip(self.snapshot_browse_button, "Select the root directory to generate a map for.")
+        Tooltip(self.snapshot_clear_dir_button, "Clear directory path")
 
         self.snapshot_ignore_var = tk.StringVar()
-        self.snapshot_ignore_entry = ttk.Entry(self.snapshot_frame, textvariable=self.snapshot_ignore_var, width=50)
-        self.snapshot_clear_ignore_button = ttk.Button(self.snapshot_frame, text="X", width=2, command=lambda: self.snapshot_ignore_var.set(''), style='ClearButton.TButton')
+        self.snapshot_ignore_entry = ttk.Entry(frame, textvariable=self.snapshot_ignore_var, width=50)
+        self.snapshot_clear_ignore_button = ttk.Button(frame, text="X", width=2, command=lambda: self.snapshot_ignore_var.set(''), style='ClearButton.TButton')
+        Tooltip(self.snapshot_ignore_entry, "Enter comma-separated names/patterns to ignore (e.g., .git, *.log, temp/)")
+        Tooltip(self.snapshot_clear_ignore_button, "Clear custom ignores")
 
-        self.snapshot_regenerate_button = ttk.Button(self.snapshot_frame, text="Generate / Regenerate Map", command=self._generate_snapshot)
+        self.snapshot_regenerate_button = ttk.Button(frame, text="Generate / Regenerate Map", command=self._generate_snapshot)
+        Tooltip(self.snapshot_regenerate_button, "Generate/Refresh the directory map based on current settings.")
 
         # Checkbox
         self.snapshot_auto_copy_var = tk.BooleanVar(value=False)
-        self.snapshot_auto_copy_check = ttk.Checkbutton(self.snapshot_frame, text="Auto-copy on generation", variable=self.snapshot_auto_copy_var)
+        self.snapshot_auto_copy_check = ttk.Checkbutton(frame, text="Auto-copy on generation/click", variable=self.snapshot_auto_copy_var)
+        Tooltip(self.snapshot_auto_copy_check, "If checked, automatically copy the map to clipboard upon generation or click-to-exclude.")
 
         # Output Area
-        self.snapshot_map_output = scrolledtext.ScrolledText(self.snapshot_frame, wrap=tk.WORD, height=15, width=60, state=tk.DISABLED)
-        self.snapshot_map_output.tag_configure("strikethrough", overstrike=True, foreground="grey50") # Configure the tag
-        self.snapshot_map_output.bind("<Button-1>", self._handle_snapshot_map_click) # Bind left-click
+        self.snapshot_map_output = scrolledtext.ScrolledText(frame, wrap=tk.WORD, height=15, width=60, state=tk.DISABLED)
+        self.snapshot_map_output.tag_configure(self.TAG_STRIKETHROUGH, overstrike=True, foreground="grey50")
+        self.snapshot_map_output.bind("<Button-1>", self._handle_snapshot_map_click)
+        Tooltip(self.snapshot_map_output, "Click on a line to toggle exclusion from copy.")
 
         # Action Buttons
-        self.snapshot_copy_button = ttk.Button(self.snapshot_frame, text="Copy to Clipboard", command=self._copy_snapshot_to_clipboard)
-        self.snapshot_save_button = ttk.Button(self.snapshot_frame, text="Save Map As...", command=self._save_snapshot_as)
+        self.snapshot_copy_button = ttk.Button(frame, text="Copy to Clipboard", command=self._copy_snapshot_to_clipboard)
+        self.snapshot_save_button = ttk.Button(frame, text="Save Map As...", command=self._save_snapshot_as)
+        Tooltip(self.snapshot_copy_button, "Copy the generated map text (respecting exclusions) to the clipboard.")
+        Tooltip(self.snapshot_save_button, "Save the generated map text to a file.")
 
         # Snapshot Status
         self.snapshot_status_var = tk.StringVar(value="Status: Ready")
-        self.snapshot_status_label = ttk.Label(self.snapshot_frame, textvariable=self.snapshot_status_var, anchor=tk.W)
+        self.snapshot_status_label = ttk.Label(frame, textvariable=self.snapshot_status_var, anchor=tk.W)
 
         # Snapshot Progress Bar
-        self.snapshot_progress_bar = ttk.Progressbar(
-            self.snapshot_frame,
-            orient=tk.HORIZONTAL,
-            length=100,
-            mode='indeterminate' # Indeterminate for snapshot initially
-        )
-
-        # --- Add Tooltips ---
-        Tooltip(self.snapshot_browse_button, "Select the root directory to generate a map for.")
-        Tooltip(self.snapshot_ignore_entry, "Enter comma-separated names/patterns to ignore (e.g., .git, *.log, temp/)")
-        Tooltip(self.snapshot_regenerate_button, "Generate/Refresh the directory map based on current settings.")
-        Tooltip(self.snapshot_auto_copy_check, "If checked, automatically copy the map to clipboard upon generation.")
-        Tooltip(self.snapshot_copy_button, "Copy the generated map text to the clipboard.")
-        Tooltip(self.snapshot_save_button, "Save the generated map text to a file.")
-        Tooltip(self.snapshot_clear_dir_button, "Clear directory path")
-        Tooltip(self.snapshot_clear_ignore_button, "Clear custom ignores")
-        Tooltip(self.snapshot_map_output, "Click on a line to toggle exclusion from copy.")
+        self.snapshot_progress_bar = ttk.Progressbar(frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
 
     def _create_scaffold_widgets(self):
         """Creates widgets for the Scaffold tab."""
+        frame = self.scaffold_frame # Use local variable
+
         # Input Area & Buttons
-        self.scaffold_input_buttons_frame = ttk.Frame(self.scaffold_frame)
+        self.scaffold_input_buttons_frame = ttk.Frame(frame) # Local frame for buttons
         self.scaffold_paste_button = ttk.Button(self.scaffold_input_buttons_frame, text="Paste Map", command=self._paste_map_input)
         self.scaffold_load_button = ttk.Button(self.scaffold_input_buttons_frame, text="Load Map...", command=self._load_map_file)
         self.scaffold_clear_map_button = ttk.Button(self.scaffold_input_buttons_frame, text="Clear Map", command=lambda: self.scaffold_map_input.delete('1.0', tk.END))
-        self.scaffold_map_input = scrolledtext.ScrolledText(self.scaffold_frame, wrap=tk.WORD, height=15, width=60)
+        Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
+        Tooltip(self.scaffold_load_button, "Load map text from a file into the input area.")
+        Tooltip(self.scaffold_clear_map_button, "Clear the map input area.")
 
-        self.scaffold_map_input.tag_configure("strikethrough", overstrike=True, foreground="grey50")
+        self.scaffold_map_input = scrolledtext.ScrolledText(frame, wrap=tk.WORD, height=15, width=60)
+        self.scaffold_map_input.tag_configure(self.TAG_STRIKETHROUGH, overstrike=True, foreground="grey50")
         self.scaffold_map_input.bind("<Button-1>", self._handle_scaffold_map_click)
+        Tooltip(self.scaffold_map_input, "Enter or paste your directory map here.\nClick lines to toggle exclusion from creation.")
 
         # Config Row Frame
-        self.scaffold_config_frame = ttk.Frame(self.scaffold_frame)
+        self.scaffold_config_frame = ttk.Frame(frame) # Local frame for config
         self.scaffold_base_dir_label = ttk.Label(self.scaffold_config_frame, text="Base Directory:")
         self.scaffold_base_dir_var = tk.StringVar()
         self.scaffold_base_dir_entry = ttk.Entry(self.scaffold_config_frame, textvariable=self.scaffold_base_dir_var, width=40)
         self.scaffold_browse_base_button = ttk.Button(self.scaffold_config_frame, text="Browse...", command=self._browse_scaffold_base_dir)
         self.scaffold_clear_base_dir_button = ttk.Button(self.scaffold_config_frame, text="X", width=2, command=lambda: self.scaffold_base_dir_var.set(''), style='ClearButton.TButton')
+        Tooltip(self.scaffold_browse_base_button, "Select the existing parent directory where the new structure will be created.")
+        Tooltip(self.scaffold_clear_base_dir_button, "Clear base directory path")
 
         self.scaffold_format_label = ttk.Label(self.scaffold_config_frame, text="Input Format:")
         self.scaffold_format_var = tk.StringVar(value="Auto-Detect")
         self.scaffold_format_combo = ttk.Combobox(
             self.scaffold_config_frame, textvariable=self.scaffold_format_var,
-            values=["Auto-Detect", "Spaces (2)", "Spaces (4)", "Tabs", "Tree", "Generic"], # Updated list
-            state='readonly'
+            values=["Auto-Detect", "Spaces (2)", "Spaces (4)", "Tabs", "Tree", "Generic"],
+            state='readonly', width=15 # Adjusted width slightly
         )
+        Tooltip(self.scaffold_format_combo, "Select the expected format of the input map (Auto-Detect recommended).")
 
         # Action Button
-        self.scaffold_create_button = ttk.Button(self.scaffold_frame, text="Create Structure", command=self._create_structure)
+        self.scaffold_create_button = ttk.Button(frame, text="Create Structure", command=self._create_structure)
+        Tooltip(self.scaffold_create_button, "Create the directory structure defined in the map input within the selected base directory.")
 
         # Status Bar
         self.scaffold_status_var = tk.StringVar(value="Status: Ready")
-        self.scaffold_status_label = ttk.Label(self.scaffold_frame, textvariable=self.scaffold_status_var, anchor=tk.W)
+        self.scaffold_status_label = ttk.Label(frame, textvariable=self.scaffold_status_var, anchor=tk.W)
 
-        # --- Open Folder Button ---
-        self.scaffold_open_folder_button = ttk.Button(
-            self.scaffold_frame,
-            text="Open Output Folder",
-            command=self._open_last_scaffold_folder
-            # state=tk.DISABLED # Start disabled, will be hidden by layout initially
-        )
-        self.last_scaffold_path = None # Variable to store the path
-
-        # --- SCAFFOLD PROGRESS BAR ---
-        if not hasattr(self, 'scaffold_progress_bar'):
-            self.scaffold_progress_bar = ttk.Progressbar(
-                self.scaffold_frame,
-                orient=tk.HORIZONTAL,
-                length=100,
-                mode='determinate'
-            )
-
-        # --- Add Tooltips ---
-        Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
-        Tooltip(self.scaffold_load_button, "Load map text from a file into the input area.")
-        Tooltip(self.scaffold_clear_map_button, "Clear the map input area.")
-        Tooltip(self.scaffold_map_input, "Enter or paste your directory map here.\nClick lines to toggle exclusion from creation.")
-        Tooltip(self.scaffold_browse_base_button, "Select the existing parent directory where the new structure will be created.")
-        Tooltip(self.scaffold_clear_base_dir_button, "Clear base directory path")
-        Tooltip(self.scaffold_format_combo, "Select the expected format of the input map (Auto-Detect recommended).")
-        Tooltip(self.scaffold_create_button, "Create the directory structure defined in the map input within the selected base directory.")
+        # Open Folder Button
+        self.scaffold_open_folder_button = ttk.Button(frame, text="Open Output Folder", command=self._open_last_scaffold_folder)
+        self.last_scaffold_path = None
         Tooltip(self.scaffold_open_folder_button, "Open the folder created by the last successful scaffold operation.")
 
-    # --- Layout Methods  ---
+        # Scaffold Progress Bar
+        self.scaffold_progress_bar = ttk.Progressbar(frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
+
+    # --- Layout Methods ---
 
     def _layout_snapshot_widgets(self):
-        """Arranges widgets in the Snapshot tab using grid (Ultra Simple - No Sub-frames)."""
-        self.snapshot_frame.columnconfigure(1, weight=1)
+        """Arranges widgets in the Snapshot tab using grid."""
+        frame = self.snapshot_frame
+        frame.columnconfigure(1, weight=1)
 
-        # Row 0: Source Directory
-        self.snapshot_dir_label.grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        self.snapshot_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=3)
-        self.snapshot_clear_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 2)) # Place in same cell
+        # Row 0: Source Directory (Labels already gridded in create)
+        self.snapshot_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=3, padx=(0,5))
+        self.snapshot_clear_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 7))
         self.snapshot_browse_button.grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
 
-        # Row 1: Custom Ignores Entry
-        self.snapshot_ignore_label.grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        self.snapshot_ignore_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3)
-        self.snapshot_clear_ignore_button.grid(row=1, column=1, sticky=tk.E, padx=(0, 2)) # Place in same cell
-        # Column 2 is free in this row
+        # Row 1: Custom Ignores Entry (Labels already gridded in create)
+        self.snapshot_ignore_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3, padx=(0,5))
+        self.snapshot_clear_ignore_button.grid(row=1, column=1, sticky=tk.E, padx=(0, 7))
 
-        # Row 2: Default Ignores Info Label
-        self.snapshot_default_ignores_label.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=7, pady=(0, 5))
+        # Row 2: Default Ignores Info Label (already gridded in create)
 
-        # Row 3: Controls (Generate Button, Checkbox)
+        # Row 3: Controls
         self.snapshot_regenerate_button.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
         self.snapshot_auto_copy_check.grid(row=3, column=1, sticky=tk.W, padx=15, pady=5)
 
-        # Row 4: Action Buttons (Copy, Save)
-        self.snapshot_copy_button.grid(row=4, column=1, sticky=tk.E, padx=5, pady=5)
-        self.snapshot_save_button.grid(row=4, column=2, sticky=tk.W, padx=5, pady=5)
+        # Row 4: Action Buttons (Copy, Save) - Use grid inside a frame
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=4, column=1, columnspan=2, sticky=tk.E, padx=5, pady=5)
+        # Use grid for buttons inside button_frame
+        self.snapshot_copy_button.grid(row=4, column=1, padx=(0, 5))
+        self.snapshot_save_button.grid(row=4, column=0)
 
         # Row 5: Output Text Area
         self.snapshot_map_output.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        self.snapshot_frame.rowconfigure(5, weight=1)
+        frame.rowconfigure(5, weight=1)
 
         # Row 6: Status Bar
         self.snapshot_status_label.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2,0), padx=5)
 
         # Row 7: Progress Bar
         self.snapshot_progress_bar.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=(1,2))
-        self.snapshot_progress_bar.grid_remove() # Hide initially
+        self.snapshot_progress_bar.grid_remove()
 
     def _layout_scaffold_widgets(self):
         """Arranges widgets in the Scaffold tab using grid."""
-        # Configure column 0 to expand, pushing column 1 (where button is) to the right
-        self.scaffold_frame.columnconfigure(0, weight=1)
-        # No weight needed for column 1 - it just holds the button
+        frame = self.scaffold_frame
+        frame.columnconfigure(0, weight=1)
+        # Column 1 for the open folder button
 
-        # Row 0: Input Buttons (remains the same)
-        self.scaffold_input_buttons_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=2) # Span both columns
-        self.scaffold_paste_button.grid(row=0, column=0, padx=5)
-        self.scaffold_load_button.grid(row=0, column=1, padx=5)
-        self.scaffold_clear_map_button.grid(row=0, column=2, padx=15)
+        # Row 0: Input Buttons Frame
+        self.scaffold_input_buttons_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=2)
+        # Use grid for buttons inside the frame
+        self.scaffold_paste_button.grid(row=0, column=0, padx=5) # Changed from pack
+        self.scaffold_load_button.grid(row=0, column=1, padx=5) # Changed from pack
+        self.scaffold_clear_map_button.grid(row=0, column=2, padx=15) # Changed from pack
 
-        # Row 1: Map Input Text Area (remains the same)
-        self.scaffold_map_input.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5) # Span both columns
-        self.scaffold_frame.rowconfigure(1, weight=1) # Allow text area to expand vertically
+        # Row 1: Map Input Text Area
+        self.scaffold_map_input.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        frame.rowconfigure(1, weight=1)
 
-        # Row 2: Configuration Frame (remains the same)
-        self.scaffold_config_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5) # Span both columns
-        # ... (widgets inside config frame need appropriate col spanning if not already done) ...
-        # Make sure config frame's internal layout works within the spanned cell
-        self.scaffold_config_frame.columnconfigure(1, weight=1) # Let Base Dir Entry expand within frame
+        # Row 2: Configuration Frame
+        self.scaffold_config_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5)
+        # Layout items within the config frame using grid (already done)
+        self.scaffold_config_frame.columnconfigure(1, weight=1)
         self.scaffold_base_dir_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 2))
         self.scaffold_base_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=2)
         self.scaffold_clear_base_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 2))
@@ -335,20 +332,18 @@ class DirMapperApp(tk.Tk):
         self.scaffold_format_label.grid(row=0, column=3, sticky=tk.W, padx=(5, 2))
         self.scaffold_format_combo.grid(row=0, column=4, sticky=tk.W, padx=2)
 
+        # Row 3: Create Button
+        self.scaffold_create_button.grid(row=3, column=0, columnspan=2, sticky=tk.E, pady=5, padx=5)
 
-        # Row 3: Create Button (remains the same)
-        self.scaffold_create_button.grid(row=3, column=0, columnspan=2, sticky=tk.E, pady=5, padx=5) # Span both columns
-
-        # --- ADJUSTED LAYOUT for Status/Button (Row 4) and Progress (Row 5) ---
         # Row 4: Status Bar (column 0) AND Open Folder Button (column 1)
-        self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(2,0), padx=5) # Status label in expanding column 0
-        self.scaffold_open_folder_button.grid(row=4, column=1, sticky=tk.E, pady=2, padx=5) # Button in fixed-size column 1 on the right
-        self.scaffold_open_folder_button.grid_remove() # Keep hidden initially
+        self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(2,0), padx=5)
+        self.scaffold_open_folder_button.grid(row=4, column=1, sticky=tk.E, pady=2, padx=5)
+        self.scaffold_open_folder_button.grid_remove()
 
-        # Row 5: Progress Bar (Spanning both columns) - Initially hidden
-        self.scaffold_progress_bar.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=(1,2)) # Progress bar below, spanning width
-        if hasattr(self, 'scaffold_progress_bar'): # Check if exists before removing
-            self.scaffold_progress_bar.grid_remove() # Hide initially
+        # Row 5: Progress Bar (Spanning both columns)
+        self.scaffold_progress_bar.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=(1,2))
+        self.scaffold_progress_bar.grid_remove()
+
 
     # --- Event Handlers / Commands ---
 
@@ -356,494 +351,266 @@ class DirMapperApp(tk.Tk):
         """Sets up the UI based on launch context."""
         initial_status = "Ready"
         active_tab_widget = self.snapshot_frame
+        target_tab_name = self.TAB_SNAPSHOT # Default
 
         if self.initial_mode == 'snapshot' and self.initial_path:
             active_tab_widget = self.snapshot_frame
+            target_tab_name = self.TAB_SNAPSHOT
             self.snapshot_dir_var.set(str(self.initial_path))
             initial_status = f"Ready to generate map for {self.initial_path.name}"
-            self.after(100, self._generate_snapshot)
+            # Don't auto-generate immediately, let user click if needed
+            # self.after(100, self._generate_snapshot)
         elif self.initial_mode == 'scaffold_from_file' and self.initial_path:
             active_tab_widget = self.scaffold_frame
+            target_tab_name = self.TAB_SCAFFOLD
             if self._load_map_from_path(self.initial_path):
                  initial_status = f"Loaded map from {self.initial_path.name}"
-                 self._check_scaffold_readiness() # Check if ready after load
+                 self._check_scaffold_readiness()
             else:
                  initial_status = "Error loading initial map file."
-                 # Error message shown by _load_map_from_path helper
         elif self.initial_mode == 'scaffold_here' and self.initial_path:
              active_tab_widget = self.scaffold_frame
+             target_tab_name = self.TAB_SCAFFOLD
              self.scaffold_base_dir_var.set(str(self.initial_path))
              initial_status = f"Ready to create structure in '{self.initial_path.name}'. Paste or load map."
-             self._check_scaffold_readiness() # Check if ready (map might be empty)
+             self._check_scaffold_readiness()
 
         self.notebook.select(active_tab_widget)
-        target_tab_name = 'snapshot' if active_tab_widget == self.snapshot_frame else 'scaffold'
         self._update_status(initial_status, tab=target_tab_name)
 
 
-    def _update_status(self, message, is_error=False, is_success=False, tab='scaffold'):
+    def _update_status(self, message, is_error=False, is_success=False, tab=None):
         """Helper to update the status label on the specified tab with color."""
+        # Determine target tab if not specified
+        if tab is None:
+             try:
+                 current_tab_index = self.notebook.index(self.notebook.select())
+                 tab = self.TAB_SNAPSHOT if current_tab_index == 0 else self.TAB_SCAFFOLD
+             except tk.TclError: # Handle case where notebook might not exist yet
+                  tab = self.TAB_SNAPSHOT # Default safely
+
+        # Remove leading "Status: " if present
         if isinstance(message, str) and message.lower().startswith("status: "):
              message = message[len("Status: "):]
 
-        status_var = self.scaffold_status_var if tab == 'scaffold' else self.snapshot_status_var
-        status_label = self.scaffold_status_label if tab == 'scaffold' else self.snapshot_status_label
+        status_var = self.scaffold_status_var if tab == self.TAB_SCAFFOLD else self.snapshot_status_var
+        status_label = self.scaffold_status_label if tab == self.TAB_SCAFFOLD else self.snapshot_status_label
 
         status_var.set(f"Status: {message}")
 
-        color = "black"
+        # Determine color
+        color = "black" # Default
         try:
             style = ttk.Style()
             default_color = style.lookup('TLabel', 'foreground')
             if is_error: color = "red"
             elif is_success: color = "#008000" # Dark Green
             else: color = default_color if default_color else "black"
-        except tk.TclError:
+        except tk.TclError: # Fallback if style lookup fails
             if is_error: color = "red"
-            elif is_success: color = "green" # Fallback brighter green
+            elif is_success: color = "green"
             else: color = "black"
 
+        # Apply color
         try:
              status_label.config(foreground=color)
-             self.update_idletasks()
-        except tk.TclError: pass
+             # self.update_idletasks() # Avoid frequent calls here
+        except tk.TclError: pass # Ignore errors if widget destroyed
 
 
     def _check_scaffold_readiness(self):
         """Checks if map input and base directory are set, updates status if ready."""
-        map_ready = bool(self.scaffold_map_input.get('1.0', tk.END).strip())
-        base_dir_ready = bool(self.scaffold_base_dir_var.get())
-        current_status = self.scaffold_status_var.get()
+        try:
+            # Check if widgets exist before accessing them
+            if not hasattr(self, 'scaffold_map_input') or \
+               not hasattr(self, 'scaffold_base_dir_var') or \
+               not hasattr(self, 'scaffold_status_var'):
+                return
 
-        if map_ready and base_dir_ready and "ready to create" not in current_status.lower() and "error" not in current_status.lower():
-            self._update_status("Ready to create structure.", is_success=True, tab='scaffold')
+            map_ready = bool(self.scaffold_map_input.get('1.0', tk.END).strip())
+            base_dir_ready = bool(self.scaffold_base_dir_var.get())
+            current_status = self.scaffold_status_var.get()
+
+            # Update only if ready and status doesn't already indicate readiness/error/processing
+            if map_ready and base_dir_ready and \
+               "ready to create" not in current_status.lower() and \
+               "error" not in current_status.lower() and \
+               "processing" not in current_status.lower() and \
+               "success" not in current_status.lower():
+                 self._update_status("Ready to create structure.", is_success=True, tab=self.TAB_SCAFFOLD)
+        except tk.TclError:
+            pass # Ignore if widgets destroyed during check
 
 
     def _browse_snapshot_dir(self):
+        """Handles snapshot source directory browsing."""
         dir_path = filedialog.askdirectory(mustexist=True, title="Select Source Directory")
         if dir_path:
             self.snapshot_dir_var.set(dir_path)
-            self._update_status("Source directory selected.", tab='snapshot')
+            self._update_status("Source directory selected.", tab=self.TAB_SNAPSHOT)
 
-    def _generate_snapshot(self):
-        """Handles the 'Generate / Regenerate Map' button click.
-        Starts snapshot generation in a thread and manages indeterminate progress bar.
-        """
-        # 1. Get Inputs & Validate (as before)
-        source_dir = self.snapshot_dir_var.get()
-        if not source_dir or not Path(source_dir).is_dir():
-            messagebox.showwarning("Input Required", "Please select a valid source directory.")
-            self._update_status("Snapshot failed: Invalid source directory.", is_error=True, tab='snapshot')
-            return
-
-        custom_ignores_str = self.snapshot_ignore_var.get()
-        custom_ignores = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else None
-
-        # --- Start Threading Logic ---
-        # 2. Prepare UI for processing
-        self.snapshot_regenerate_button.config(state=tk.DISABLED) # Disable button
-        self.snapshot_map_output.config(state=tk.NORMAL) # Ensure output is usable
-        self.snapshot_map_output.delete('1.0', tk.END) # Clear previous output
-        self.snapshot_progress_bar['mode'] = 'indeterminate'
-        self.snapshot_progress_bar.grid() # Show progress bar
-        self.snapshot_progress_bar.start() # Start indeterminate animation
-        self.update_idletasks() # Ensure UI updates
-        self._update_status("Generating map...", tab='snapshot')
-
-        # 3. Create and Start the thread
-        print("DEBUG: Creating and starting snapshot thread...") # Debug print
-        self.snapshot_thread = threading.Thread(
-            target=self._snapshot_thread_target,
-            args=(source_dir, custom_ignores, self.snapshot_queue),
-            daemon=True
-        )
-        self.snapshot_thread.start()
-        # 4. Start checking the queue
-        print("DEBUG: Starting snapshot queue check loop.") # Debug print
-        self.after(100, self._check_snapshot_queue) # Check queue every 100ms
-
-    def _snapshot_thread_target(self, source_dir, custom_ignores, q):
-        """Calls the snapshot logic and puts result in queue."""
-        try:
-            # --- IMPORTANT ---
-            # We need to modify logic.create_directory_snapshot later
-            # to ACCEPT the queue, although it won't use it for progress updates.
-            # It's good practice to pass it if the pattern requires it,
-            # or we modify the pattern. Let's assume we modify logic.py later.
-            map_result = logic.create_directory_snapshot(
-                 source_dir,
-                 custom_ignore_patterns=custom_ignores
-                 # queue=q # Pass queue eventually if needed by pattern/future features
-            )
-            # Determine success based on result string
-            success = not map_result.startswith("Error:")
-            q.put({'type': 'result', 'success': success, 'map_text': map_result})
-
-        except Exception as e:
-             q.put({'type': 'result', 'success': False, 'map_text': f"Error in thread: {e}"})
-             import traceback
-             traceback.print_exc()
-
-    def _check_snapshot_queue(self):
-        """Checks queue for messages from snapshot thread and updates UI."""
-        try:
-            while True: # Process all messages currently in queue
-                msg = self.snapshot_queue.get_nowait()
-
-                if msg['type'] == 'result':
-                    # --- Handle final result ---
-                    success = msg['success']
-                    map_text_result = msg['map_text']
-
-                    # Stop and hide progress bar
-                    self.snapshot_progress_bar.stop()
-                    self.snapshot_progress_bar.grid_remove()
-
-                    # Update text area (ensure state is normal first)
-                    self.snapshot_map_output.config(state=tk.NORMAL)
-                    self.snapshot_map_output.delete('1.0', tk.END) # Clear again just in case
-                    self.snapshot_map_output.insert('1.0', map_text_result)
-                    # We leave it NORMAL for the click interaction now
-                    # self.snapshot_map_output.config(state=tk.DISABLED) # Disable after insert
-
-                    # Update status bar
-                    status_msg = "Map generated." if success else map_text_result
-                    copied_ok_auto = False
-                    if success:
-                        # Handle auto-copy if enabled
-                        if self.snapshot_auto_copy_var.get():
-                            copied_ok_auto = self._copy_snapshot_to_clipboard(show_status=False) # Copy silently
-                            status_msg = "Map generated and copied." if copied_ok_auto else "Map generated (auto-copy failed)."
-                    self._update_status(status_msg, is_error=not success, is_success=success, tab='snapshot')
-
-                    # Re-enable button
-                    self.snapshot_regenerate_button.config(state=tk.NORMAL)
-                    return # Stop checking queue
-
-        except queue.Empty:
-            # Queue is empty, check again later if thread is still alive
-            if self.snapshot_thread.is_alive():
-                self.after(100, self._check_snapshot_queue)
-            else:
-                # Thread finished unexpectedly
-                self.snapshot_progress_bar.stop()
-                self.snapshot_progress_bar.grid_remove()
-                self.snapshot_regenerate_button.config(state=tk.NORMAL)
-                # Maybe update status?
-                # self._update_status("Snapshot generation finished unexpectedly.", is_error=True, tab='snapshot')
-
-        except Exception as e:
-            # Handle unexpected errors in the queue checking logic itself
-            print(f"ERROR: Exception in _check_snapshot_queue: {e}")
-            import traceback
-            traceback.print_exc()
-            self.snapshot_progress_bar.stop()
-            self.snapshot_progress_bar.grid_remove()
-            self.snapshot_regenerate_button.config(state=tk.NORMAL)
-            self._update_status(f"UI Error during snapshot processing: {e}", is_error=True, tab='snapshot')
 
     def _copy_snapshot_to_clipboard(self, show_status=True):
-        """Copies the snapshot map to the clipboard, excluding lines that are
-        either struck-through OR match a pattern in the custom ignore field.
-        """
+        """Copies the snapshot map to the clipboard, respecting exclusions."""
         map_widget = self.snapshot_map_output
         original_map_text = map_widget.get('1.0', tk.END).strip()
+        tag_name = self.TAG_STRIKETHROUGH
 
-        # 1. Get ignore patterns from the CSV field
+        # Get ignore patterns from the CSV field
         custom_ignores_str = self.snapshot_ignore_var.get()
-        # Ensure patterns are stripped and non-empty
         ignore_patterns_from_csv = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else set()
 
         lines_to_copy = []
+        num_lines = 0
         try:
-            # Determine the last line number
-            last_line_index = map_widget.index('end-1c') # Index of last char
-            if not last_line_index: # Handle empty widget case
-                 num_lines = 0
-            else:
-                 num_lines = int(last_line_index.split('.')[0])
+            last_line_index = map_widget.index('end-1c')
+            if last_line_index:
+                num_lines = int(last_line_index.split('.')[0])
+                for i in range(1, num_lines + 1):
+                    line_start = f"{i}.0"
+                    line_text = map_widget.get(line_start, f"{i}.end")
+                    if not line_text.strip(): continue
 
-            for i in range(1, num_lines + 1):
-                line_start = f"{i}.0"
-                line_end = f"{i}.end"
-                line_text = map_widget.get(line_start, line_end)
+                    # Check strikethrough tag on content
+                    content_start_index, _ = self._get_content_range(widget=map_widget, line_start_index=line_start, line_text=line_text)
+                    is_struck_through = False
+                    if content_start_index:
+                        tags_on_content = map_widget.tag_names(content_start_index)
+                        is_struck_through = tag_name in tags_on_content
+                    if is_struck_through: continue
 
-                # Skip blank lines in output
-                if not line_text.strip():
-                    continue
+                    # Check against CSV ignores
+                    item_name = line_text.strip().rstrip('/')
+                    is_ignored_by_csv = False
+                    if item_name and ignore_patterns_from_csv:
+                        for pattern in ignore_patterns_from_csv:
+                            if fnmatch.fnmatch(item_name, pattern) or \
+                               (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(item_name, pattern.rstrip('/\\'))):
+                                is_ignored_by_csv = True; break
+                    if is_ignored_by_csv: continue
 
-                # 2. Check for strikethrough tag
-                tags_on_line = map_widget.tag_names(line_start)
-                is_struck_through = "strikethrough" in tags_on_line
-                # print(f"DEBUG Copy: Line {i}, Struck: {is_struck_through}, Text: '{line_text}'") # Optional debug
-
-                if is_struck_through:
-                    continue # Skip struck-through lines
-
-                # 3. If not struck through, check against CSV ignores
-                #    Extract item name (simple version: strip whitespace and trailing slash)
-                #    This needs to be consistent with how names are added from clicks
-                item_name = line_text.strip().rstrip('/')
-                # Optional: Strip common list prefixes if they might appear (unlikely here)
-                # item_name = logic.PREFIX_STRIP_RE_GENERIC.sub("", item_name).strip()
-
-                is_ignored_by_csv = False
-                if item_name and ignore_patterns_from_csv: # Only check if we have a name and patterns
-                    for pattern in ignore_patterns_from_csv:
-                        # Use fnmatch for pattern matching (e.g., *.log) and handle dirs
-                        if fnmatch.fnmatch(item_name, pattern) or \
-                           (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(item_name, pattern.rstrip('/\\'))):
-                            is_ignored_by_csv = True
-                            # print(f"DEBUG Copy: Line {i} item '{item_name}' matched CSV pattern '{pattern}'") # Optional debug
-                            break
-
-                if is_ignored_by_csv:
-                    continue # Skip lines matching CSV ignores
-
-                # 4. If not struck through AND not ignored by CSV, add it
-                lines_to_copy.append(line_text)
+                    lines_to_copy.append(line_text)
 
         except tk.TclError as e:
              print(f"ERROR Copy: Error processing text widget content: {e}")
              messagebox.showerror("Error", f"Error preparing text for copy:\n{e}")
-             if show_status: self._update_status("Error during copy preparation.", is_error=True, tab='snapshot')
-             return False # Indicate copy failed
+             if show_status: self._update_status("Error during copy preparation.", is_error=True, tab=self.TAB_SNAPSHOT)
+             return False
 
-        # 5. Join and copy
+        # Join and copy
         final_text = "\n".join(lines_to_copy)
 
-        # --- Status/Clipboard Logic ---
+        # Status/Clipboard Logic
         status_msg = ""
         is_error = False
         is_success = False
         copied = False
-
         if final_text:
             try:
                 pyperclip.copy(final_text)
-                # Be more specific about success
-                if len(lines_to_copy) < num_lines and original_map_text:
-                     status_msg = "Map (with exclusions) copied to clipboard."
-                else: # Copied everything or map was empty
-                     status_msg = "Map copied to clipboard."
-                is_success = True
-                copied = True
+                original_non_blank_lines = len([line for line in original_map_text.splitlines() if line.strip()])
+                if len(lines_to_copy) < original_non_blank_lines and original_map_text:
+                     status_msg = "Map (with exclusions) copied."
+                else: status_msg = "Map copied to clipboard."
+                is_success = True; copied = True
             except Exception as e:
                 messagebox.showerror("Clipboard Error", f"Could not copy to clipboard:\n{e}")
-                status_msg = "Failed to copy map to clipboard."
-                is_error = True
-        elif not original_map_text: # Check if original map was empty
+                status_msg = "Failed to copy map to clipboard."; is_error = True
+        elif not original_map_text:
             if show_status: messagebox.showwarning("No Content", "Nothing to copy.")
-            status_msg = "Copy failed: No map content."
-            is_error = True # Treat as non-success
-        else: # Original map had content, but all lines were excluded
+            status_msg = "Copy failed: No map content."; is_error = True
+        else:
             if show_status: messagebox.showwarning("Empty Result", "All lines were excluded, nothing copied.")
-            status_msg = "Copy failed: All lines excluded."
-            is_error = True # Treat as non-success
+            status_msg = "Copy failed: All lines excluded."; is_error = True
 
         if show_status:
-             self._update_status(status_msg, is_error=is_error, is_success=is_success, tab='snapshot')
-        return copied # Return True if copy succeeded, False otherwise
-    
-    def _handle_snapshot_map_click(self, event):
-        """Handles clicks on the snapshot map output area.
-        Toggles strikethrough tag ON TEXT ONLY for the clicked item and its
-        descendants (if it's a directory). Updates ignore CSV list,
-        and optionally auto-copies.
-        """
-        widget = self.snapshot_map_output
-        tag_name = "strikethrough"
+             self._update_status(status_msg, is_error=is_error, is_success=is_success, tab=self.TAB_SNAPSHOT)
+        return copied
 
-        if str(widget.cget("state")) != tk.NORMAL:
-             return
-
-        try:
-            clicked_index_str = widget.index(f"@{event.x},{event.y}")
-            # Ensure click wasn't on empty space after last line
-            if not widget.get(clicked_index_str, f"{clicked_index_str} +1c").strip():
-                 return
-
-            clicked_line_start = widget.index(f"{clicked_index_str} linestart")
-            clicked_line_end = widget.index(f"{clicked_index_str} lineend")
-            clicked_line_num = int(clicked_line_start.split('.')[0])
-            clicked_line_text = widget.get(clicked_line_start, clicked_line_end)
-
-            # Ignore clicks on completely blank lines
-            if not clicked_line_text.strip():
-                return
-
-            # --- Calculate initial line info ---
-            clicked_stripped_text = clicked_line_text.strip()
-            clicked_leading_spaces = len(clicked_line_text) - len(clicked_line_text.lstrip())
-            clicked_content_start_index = f"{clicked_line_start} + {clicked_leading_spaces} chars"
-
-            # --- Determine if Directory (Heuristic) ---
-            is_likely_directory = False
-            if clicked_stripped_text.endswith('/'):
-                is_likely_directory = True
-            else:
-                next_line_num = clicked_line_num + 1
-                next_line_start = f"{next_line_num}.0"
-                if widget.compare(next_line_start, "<", "end-1c"):
-                    next_line_text = widget.get(next_line_start, f"{next_line_num}.end")
-                    # Check if next line is not blank before calculating indent
-                    if next_line_text.strip():
-                         next_indent = len(next_line_text) - len(next_line_text.lstrip())
-                         if next_indent > clicked_leading_spaces:
-                             is_likely_directory = True
-
-            # --- Determine Action based on initial click ---
-            initial_tags = widget.tag_names(clicked_content_start_index)
-            was_initially_struck_through = tag_name in initial_tags
-            apply_tag_action = not was_initially_struck_through # If it wasn't struck, action is to apply tag
-
-            # --- Identify all lines to process (clicked + children if directory) ---
-            lines_to_process_indices = [(clicked_line_num, clicked_line_start)] # List of (line_num, line_start_index)
-            if is_likely_directory:
-                # Start checking from the line AFTER the clicked one
-                current_check_line_num = clicked_line_num + 1
-                while True:
-                    current_check_start = f"{current_check_line_num}.0"
-                    # Stop if we've gone past the end of the text widget
-                    if not widget.compare(current_check_start, "<", "end-1c"):
-                        break
-
-                    current_check_text = widget.get(current_check_start, f"{current_check_line_num}.end")
-                    # Skip blank lines when checking hierarchy
-                    if not current_check_text.strip():
-                        current_check_line_num += 1
-                        continue
-
-                    current_check_indent = len(current_check_text) - len(current_check_text.lstrip())
-
-                    if current_check_indent > clicked_leading_spaces:
-                        # It's a child/descendant, add to list
-                        lines_to_process_indices.append((current_check_line_num, current_check_start))
-                    else:
-                        # Indentation is same or less, stop searching down this branch
-                        break
-                    current_check_line_num += 1
-
-            # --- Process all identified lines ---
-            ignore_set_changed = False
-            # Get current CSV ignores ONCE before the loop
-            current_csv_str = self.snapshot_ignore_var.get()
-            ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip()) if current_csv_str else set()
-
-            for line_num, line_start_index in lines_to_process_indices:
-                line_end_index = f"{line_num}.end"
-                line_text_loop = widget.get(line_start_index, line_end_index)
-                stripped_text_loop = line_text_loop.strip()
-                item_name = stripped_text_loop.rstrip('/')
-
-                # Calculate content range for this specific line
-                leading_spaces_loop = len(line_text_loop) - len(line_text_loop.lstrip())
-                content_len_loop = len(stripped_text_loop)
-                content_start_idx_loop = f"{line_start_index} + {leading_spaces_loop} chars"
-                content_end_idx_loop = f"{content_start_idx_loop} + {content_len_loop} chars"
-
-                # Apply or remove tag
-                if apply_tag_action:
-                    widget.tag_add(tag_name, content_start_idx_loop, content_end_idx_loop)
-                    if item_name and item_name not in ignore_set:
-                        ignore_set.add(item_name)
-                        ignore_set_changed = True
-                else:
-                    widget.tag_remove(tag_name, content_start_idx_loop, content_end_idx_loop)
-                    if item_name and item_name in ignore_set:
-                        ignore_set.remove(item_name)
-                        ignore_set_changed = True
-
-            # --- Update CSV and Status Bar (only if changes were made) ---
-            status_action = ""
-            if ignore_set_changed:
-                new_csv_str = ", ".join(sorted(list(ignore_set)))
-                self.snapshot_ignore_var.set(new_csv_str)
-                # Determine overall action for status message
-                if apply_tag_action:
-                     status_action = "Added item(s) to"
-                else:
-                     status_action = "Removed item(s) from"
-                self._update_status(f"{status_action} custom ignores.", tab='snapshot')
-
-            # --- Auto-Copy Check ---
-            # Trigger if the ignore set was changed by the click action
-            if ignore_set_changed and self.snapshot_auto_copy_var.get():
-                 # print("DEBUG: Auto-copy triggered by click.")
-                 self._copy_snapshot_to_clipboard(show_status=False)
-                 # self._update_status(f"{status_action} ignores. Auto-copied.", tab='snapshot') # Optional combined status
-
-        except tk.TclError as e:
-            print(f"DEBUG: Error handling click: {e}")
-            pass
-        # Optional: return "break"
 
     def _save_snapshot_as(self):
-        map_text = self.snapshot_map_output.get('1.0', tk.END).strip()
-        if not map_text or map_text.startswith("Error:"):
-            messagebox.showwarning("No Content", "Nothing to save.")
-            self._update_status("Save failed: No map content.", is_error=True, tab='snapshot')
-            return
+        """Saves the currently displayed snapshot map text to a file."""
+        # Saves the raw text currently in the widget, not filtered text
+        map_widget = self.snapshot_map_output
+        try:
+            map_text_to_save = map_widget.get('1.0', tk.END) # Get full text including final newline
+            # Check if content is just whitespace or error message
+            if not map_text_to_save.strip() or map_text_to_save.strip().startswith("Error:"):
+                 messagebox.showwarning("No Content", "Nothing valid to save.")
+                 self._update_status("Save failed: No valid map content.", is_error=True, tab=self.TAB_SNAPSHOT)
+                 return
+        except tk.TclError:
+             messagebox.showerror("Error", "Could not retrieve map text.")
+             self._update_status("Save failed: Could not get map text.", is_error=True, tab=self.TAB_SNAPSHOT)
+             return
 
+        # Suggest filename based on root
         suggested_filename = "directory_map.txt"
         try:
-            first_line = map_text.splitlines()[0].strip()
-            root_name = first_line.rstrip('/') if first_line else ""
-            if root_name:
-                safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', root_name) # Sanitize for filename
-                if not safe_root_name: safe_root_name = "map"
-                suggested_filename = f"{safe_root_name}_map.txt"
+             first_line = map_text_to_save.splitlines()[0].strip()
+             root_name = first_line.rstrip('/') if first_line else ""
+             if root_name:
+                 safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', root_name)
+                 if not safe_root_name: safe_root_name = "map"
+                 suggested_filename = f"{safe_root_name}_map.txt"
         except IndexError: pass
 
+        # Ask for save path
         file_path = filedialog.asksaveasfilename(
             initialfile=suggested_filename,
             defaultextension=".txt",
             filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
             title="Save Directory Map As..."
         )
-        if file_path:
-            saved_filename = Path(file_path).name
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(map_text)
-                self._update_status(f"Map saved to {saved_filename}", is_success=True, tab='snapshot')
-            except Exception as e:
-                messagebox.showerror("File Save Error", f"Could not save file:\n{e}")
-                self._update_status(f"Failed to save map to {saved_filename}", is_error=True, tab='snapshot')
-        else:
-            self._update_status("Save cancelled.", tab='snapshot')
+        if not file_path:
+            self._update_status("Save cancelled.", tab=self.TAB_SNAPSHOT)
+            return
+
+        # Write to file
+        saved_filename = Path(file_path).name
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(map_text_to_save)
+            self._update_status(f"Map saved to {saved_filename}", is_success=True, tab=self.TAB_SNAPSHOT)
+        except Exception as e:
+            messagebox.showerror("File Save Error", f"Could not save file:\n{e}")
+            self._update_status(f"Failed to save map to {saved_filename}", is_error=True, tab=self.TAB_SNAPSHOT)
 
 
     def _browse_scaffold_base_dir(self):
+        """Handles scaffold base directory browsing."""
         dir_path = filedialog.askdirectory(mustexist=True, title="Select Base Directory for Scaffolding")
         if dir_path:
             self.scaffold_base_dir_var.set(dir_path)
-            self._update_status(f"Base directory set to '{Path(dir_path).name}'.", is_success=True, tab='scaffold')
+            self._update_status(f"Base directory set to '{Path(dir_path).name}'.", is_success=True, tab=self.TAB_SCAFFOLD)
             self._check_scaffold_readiness()
 
 
     def _paste_map_input(self):
+        """Pastes map text from clipboard into scaffold input."""
         try:
             clipboard_content = pyperclip.paste()
             if clipboard_content:
-                self.scaffold_map_input.config(state=tk.NORMAL)
-                self.scaffold_map_input.delete('1.0', tk.END)
-                self.scaffold_map_input.insert('1.0', clipboard_content)
-                self._update_status("Pasted map from clipboard.", is_success=True, tab='scaffold')
-                self._check_scaffold_readiness()
+                 # Clear existing tags before pasting
+                 self.scaffold_map_input.tag_remove(self.TAG_STRIKETHROUGH, '1.0', tk.END)
+                 self.scaffold_map_input.delete('1.0', tk.END)
+                 self.scaffold_map_input.insert('1.0', clipboard_content)
+                 self._update_status("Pasted map from clipboard.", is_success=True, tab=self.TAB_SCAFFOLD)
+                 self._check_scaffold_readiness()
             else:
-                self._update_status("Clipboard is empty.", tab='scaffold')
+                 self._update_status("Clipboard is empty.", tab=self.TAB_SCAFFOLD)
         except Exception as e:
             messagebox.showerror("Clipboard Error", f"Could not paste from clipboard:\n{e}")
-            self._update_status("Failed to paste from clipboard.", is_error=True, tab='scaffold')
+            self._update_status("Failed to paste from clipboard.", is_error=True, tab=self.TAB_SCAFFOLD)
 
 
     def _load_map_from_path(self, file_path_obj):
-        """Helper to load map from a Path object."""
+        """Helper to load map from a Path object into scaffold input."""
         try:
             with open(file_path_obj, 'r', encoding='utf-8') as f:
                 map_content = f.read()
-            self.scaffold_map_input.config(state=tk.NORMAL)
+            # Clear existing tags before loading
+            self.scaffold_map_input.tag_remove(self.TAG_STRIKETHROUGH, '1.0', tk.END)
             self.scaffold_map_input.delete('1.0', tk.END)
             self.scaffold_map_input.insert('1.0', map_content)
             return True
@@ -853,326 +620,547 @@ class DirMapperApp(tk.Tk):
 
 
     def _load_map_file(self):
+        """Handles loading map file into scaffold input."""
         file_path = filedialog.askopenfilename(
-            filetypes=[("Text Files", "*.txt"), ("Map Files", "*.map"), ("All Files", "*.*")],
-            title="Load Directory Map File"
+             filetypes=[("Text Files", "*.txt"), ("Map Files", "*.map"), ("All Files", "*.*")],
+             title="Load Directory Map File"
         )
         if file_path:
-            loaded_ok = self._load_map_from_path(Path(file_path))
-            if loaded_ok:
-                self._update_status(f"Loaded map from {Path(file_path).name}", is_success=True, tab='scaffold')
-                self._check_scaffold_readiness()
-            else:
-                self._update_status("Error loading map file.", is_error=True, tab='scaffold')
+             loaded_ok = self._load_map_from_path(Path(file_path))
+             if loaded_ok:
+                 self._update_status(f"Loaded map from {Path(file_path).name}", is_success=True, tab=self.TAB_SCAFFOLD)
+                 self._check_scaffold_readiness()
+             else:
+                 self._update_status("Error loading map file.", is_error=True, tab=self.TAB_SCAFFOLD)
 
-    def _handle_scaffold_map_click(self, event):
-        """Handles clicks on the scaffold map input area.
-        Toggles strikethrough tag ON TEXT ONLY for the clicked item and its
-        descendants (based on indentation).
-        """
-        widget = self.scaffold_map_input
-        tag_name = "strikethrough"
 
-        if str(widget.cget("state")) != tk.NORMAL:
-             return
+    # --- Click Handler Helper Methods ---
+
+    def _get_line_info(self, widget, tk_index):
+        """Gets line number, start/end indices, text, stripped text, and indent."""
+        try:
+            char_at_index = widget.get(tk_index)
+            if not char_at_index or char_at_index.isspace():
+                 line_start_check = widget.index(f"{tk_index} linestart")
+                 line_end_check = widget.index(f"{tk_index} lineend")
+                 if widget.compare(tk_index, ">=", line_end_check): return None
+
+            line_start = widget.index(f"{tk_index} linestart")
+            line_end = widget.index(f"{tk_index} lineend")
+            line_num = int(line_start.split('.')[0])
+            line_text = widget.get(line_start, line_end)
+            stripped_text = line_text.strip()
+
+            if not stripped_text: return None
+
+            leading_spaces = len(line_text) - len(line_text.lstrip())
+            return {
+                "num": line_num, "start": line_start, "end": line_end,
+                "text": line_text, "stripped": stripped_text, "indent": leading_spaces
+            }
+        except tk.TclError: return None
+
+    def _get_content_range(self, widget, line_start_index, line_text=None):
+        """Calculates the start/end indices of non-whitespace content."""
+        try:
+            if line_text is None:
+                 line_text = widget.get(line_start_index, f"{line_start_index} lineend")
+            stripped_text = line_text.strip()
+            if not stripped_text: return None, None
+
+            leading_spaces = len(line_text) - len(line_text.lstrip())
+            content_len = len(stripped_text)
+            content_start_idx = f"{line_start_index} + {leading_spaces} chars"
+            content_end_idx = f"{content_start_idx} + {content_len} chars"
+            return content_start_idx, content_end_idx
+        except tk.TclError: return None, None
+
+    def _toggle_tag_on_range(self, widget, tag_name, apply_action, start_idx, end_idx):
+        """Applies or removes a tag on a specific text range."""
+        if not start_idx or not end_idx: return
+        try:
+            if apply_action: widget.tag_add(tag_name, start_idx, end_idx)
+            else: widget.tag_remove(tag_name, start_idx, end_idx)
+        except tk.TclError as e: print(f"ERROR: Failed to toggle tag '{tag_name}' on range {start_idx}-{end_idx}: {e}")
+
+    def _get_descendant_lines(self, widget, start_line_num, start_indent):
+        """Identifies line indices for descendants based on indentation."""
+        descendant_lines = []
+        current_check_line_num = start_line_num + 1
+        while True:
+            current_check_start = f"{current_check_line_num}.0"
+            if not widget.compare(current_check_start, "<", "end-1c"): break
+            current_check_text = widget.get(current_check_start, f"{current_check_line_num}.end")
+            stripped_check = current_check_text.strip()
+            if not stripped_check: current_check_line_num += 1; continue
+            current_check_indent = len(current_check_text) - len(current_check_text.lstrip())
+            if current_check_indent > start_indent:
+                descendant_lines.append((current_check_line_num, current_check_start))
+            else: break
+            current_check_line_num += 1
+        return descendant_lines
+
+    def _update_ignore_csv(self, item_name, add_action):
+        """Parses, updates, and sets the snapshot ignore CSV string var. Returns True if changed."""
+        if not item_name: return False
+        changed = False
+        current_csv_str = self.snapshot_ignore_var.get()
+        ignore_set = set(p.strip() for p in current_csv_str.split(',') if p.strip()) if current_csv_str else set()
+        if add_action:
+            if item_name not in ignore_set: ignore_set.add(item_name); changed = True
+        else:
+            if item_name in ignore_set: ignore_set.remove(item_name); changed = True
+        if changed:
+            new_csv_str = ", ".join(sorted(list(ignore_set)))
+            self.snapshot_ignore_var.set(new_csv_str)
+        return changed
+
+    def _is_directory_heuristic(self, widget, line_info):
+        """Determines if a line likely represents a directory using heuristics."""
+        if line_info["stripped"].endswith('/'): return True
+        next_line_num = line_info["num"] + 1
+        next_line_start = f"{next_line_num}.0"
+        if widget.compare(next_line_start, "<", "end-1c"):
+            next_line_text = widget.get(next_line_start, f"{next_line_num}.end")
+            if next_line_text.strip():
+                 next_indent = len(next_line_text) - len(next_line_text.lstrip())
+                 if next_indent > line_info["indent"]: return True
+        return False
+
+    # --- Refactored Click Handlers ---
+
+    def _handle_snapshot_map_click(self, event):
+        """Handles clicks on the snapshot map output area using helpers."""
+        widget = self.snapshot_map_output
+        tag_name = self.TAG_STRIKETHROUGH
+
+        if str(widget.cget("state")) != tk.NORMAL: return
 
         try:
-            clicked_index_str = widget.index(f"@{event.x},{event.y}")
-            # Ensure click wasn't on empty space after last line
-            if not widget.get(clicked_index_str, f"{clicked_index_str} +1c").strip():
-                 return
+            clicked_info = self._get_line_info(widget, f"@{event.x},{event.y}")
+            if not clicked_info: return
 
-            clicked_line_start = widget.index(f"{clicked_index_str} linestart")
-            # clicked_line_end = widget.index(f"{clicked_index_str} lineend") # Not needed immediately
-            clicked_line_num = int(clicked_line_start.split('.')[0])
-            clicked_line_text = widget.get(clicked_line_start, f"{clicked_line_start} lineend") # Get full line text
+            content_start_idx, _ = self._get_content_range(widget, clicked_info["start"], clicked_info["text"])
+            if not content_start_idx: return
 
-            # Ignore clicks on completely blank lines
-            if not clicked_line_text.strip():
-                return
+            initial_tags = widget.tag_names(content_start_idx)
+            apply_tag_action = tag_name not in initial_tags
 
-            # --- Calculate initial line info ---
-            clicked_stripped_text = clicked_line_text.strip()
-            clicked_leading_spaces = len(clicked_line_text) - len(clicked_line_text.lstrip())
-            # Calculate start index of actual content for checking tags
-            content_start_index_clicked = f"{clicked_line_start} + {clicked_leading_spaces} chars"
+            lines_to_process = [(clicked_info["num"], clicked_info["start"], clicked_info["text"])]
+            if self._is_directory_heuristic(widget, clicked_info):
+                descendants = self._get_descendant_lines(widget, clicked_info["num"], clicked_info["indent"])
+                for d_num, d_start in descendants:
+                    d_text = widget.get(d_start, f"{d_num}.end")
+                    lines_to_process.append((d_num, d_start, d_text))
 
-            # --- Determine Action based on initial click ---
-            initial_tags = widget.tag_names(content_start_index_clicked)
-            was_initially_struck_through = tag_name in initial_tags
-            apply_tag_action = not was_initially_struck_through # If it wasn't struck, action is to apply tag
+            ignore_set_changed = False
+            for line_num, line_start, line_text in lines_to_process:
+                stripped_text = line_text.strip()
+                item_name = stripped_text.rstrip('/')
+                if not item_name: continue
 
-            # --- Identify all lines to process (clicked + children) ---
-            # We need indentation to determine hierarchy
-            lines_to_process_indices = [(clicked_line_num, clicked_line_start)] # List of (line_num, line_start_index)
+                c_start, c_end = self._get_content_range(widget, line_start, line_text)
+                self._toggle_tag_on_range(widget, tag_name, apply_tag_action, c_start, c_end)
 
-            # Check subsequent lines for children only if the clicked line could be a parent
-            # (No need to look for children if clicking the last line, for example)
-            current_check_line_num = clicked_line_num + 1
-            while True:
-                current_check_start = f"{current_check_line_num}.0"
-                # Stop if we've gone past the end of the text widget
-                if not widget.compare(current_check_start, "<", "end-1c"):
-                    break
+                if self._update_ignore_csv(item_name, apply_tag_action):
+                    ignore_set_changed = True
 
-                current_check_text = widget.get(current_check_start, f"{current_check_line_num}.end")
-                # Skip blank lines when checking hierarchy
-                if not current_check_text.strip():
-                    current_check_line_num += 1
-                    continue
+            if ignore_set_changed:
+                status_action = "Added item(s) to" if apply_tag_action else "Removed item(s) from"
+                self._update_status(f"{status_action} custom ignores.", tab=self.TAB_SNAPSHOT)
 
-                current_check_indent = len(current_check_text) - len(current_check_text.lstrip())
+            if ignore_set_changed and self.snapshot_auto_copy_var.get():
+                 self._copy_snapshot_to_clipboard(show_status=False)
 
-                if current_check_indent > clicked_leading_spaces:
-                    # It's a child/descendant, add to list
-                    lines_to_process_indices.append((current_check_line_num, current_check_start))
-                else:
-                    # Indentation is same or less, stop searching down this branch
-                    break
-                current_check_line_num += 1
+        except Exception as e:
+            print(f"ERROR: Unhandled exception in _handle_snapshot_map_click: {e}")
+            import traceback; traceback.print_exc()
 
-            # --- Process all identified lines (Apply/Remove Tags Visually) ---
-            for line_num, line_start_index in lines_to_process_indices:
-                line_end_index = f"{line_num}.end"
-                line_text_loop = widget.get(line_start_index, line_end_index)
-                stripped_text_loop = line_text_loop.strip()
 
-                # Calculate content range for this specific line
-                leading_spaces_loop = len(line_text_loop) - len(line_text_loop.lstrip())
-                # Avoid tagging if line is actually blank after stripping potential prefixes later
-                if not stripped_text_loop:
-                    continue
-                content_len_loop = len(stripped_text_loop)
-                content_start_idx_loop = f"{line_start_index} + {leading_spaces_loop} chars"
-                content_end_idx_loop = f"{content_start_idx_loop} + {content_len_loop} chars"
+    def _handle_scaffold_map_click(self, event):
+        """Handles clicks on the scaffold map input area using helpers."""
+        widget = self.scaffold_map_input
+        tag_name = self.TAG_STRIKETHROUGH
 
-                # Apply or remove tag
-                if apply_tag_action:
-                    widget.tag_add(tag_name, content_start_idx_loop, content_end_idx_loop)
-                else:
-                    widget.tag_remove(tag_name, content_start_idx_loop, content_end_idx_loop)
+        if str(widget.cget("state")) != tk.NORMAL: return
 
-        except tk.TclError as e:
-            print(f"DEBUG: Error handling scaffold click: {e}")
-            pass
+        try:
+            clicked_info = self._get_line_info(widget, f"@{event.x},{event.y}")
+            if not clicked_info: return
+
+            content_start_idx, _ = self._get_content_range(widget, clicked_info["start"], clicked_info["text"])
+            if not content_start_idx: return
+
+            initial_tags = widget.tag_names(content_start_idx)
+            apply_tag_action = tag_name not in initial_tags
+
+            lines_to_process = [(clicked_info["num"], clicked_info["start"], clicked_info["text"])]
+            descendants = self._get_descendant_lines(widget, clicked_info["num"], clicked_info["indent"])
+            for d_num, d_start in descendants:
+                 d_text = widget.get(d_start, f"{d_num}.end")
+                 lines_to_process.append((d_num, d_start, d_text))
+
+            for line_num, line_start, line_text in lines_to_process:
+                c_start, c_end = self._get_content_range(widget, line_start, line_text)
+                self._toggle_tag_on_range(widget, tag_name, apply_tag_action, c_start, c_end)
+
+        except Exception as e:
+            print(f"ERROR: Unhandled exception in _handle_scaffold_map_click: {e}")
+            import traceback; traceback.print_exc()
+
+
+    # --- Threading / Queue Helpers ---
+
+    def _start_background_task(self, target_func, args, queue_obj, button_widget,
+                               progressbar_widget, status_msg, tab_name, progress_mode='indeterminate',
+                               queue_check_func=None):
+        """Handles common UI prep and thread starting for background tasks."""
+        # 1. Prepare UI
+        button_widget.config(state=tk.DISABLED)
+        if progressbar_widget:
+            # Use widget object directly if available
+            pb_widget_obj = progressbar_widget
+            if pb_widget_obj:
+                pb_widget_obj['value'] = 0
+                pb_widget_obj['mode'] = progress_mode
+                pb_widget_obj.grid() # Show progress bar
+                if progress_mode == 'indeterminate':
+                    pb_widget_obj.start()
+                self.update_idletasks() # Ensure UI updates before thread start
+            else:
+                print(f"Warning: Progress bar widget object not found for {tab_name}")
+                progressbar_widget = None # Avoid errors later? Or rely on hasattr check?
+
+        self._update_status(status_msg, tab=tab_name)
+
+        # 2. Create and Start the thread
+        # Determine which thread attribute to store based on tab
+        thread_attr = "snapshot_thread" if tab_name == self.TAB_SNAPSHOT else "scaffold_thread"
+
+        thread = threading.Thread(
+            target=target_func,
+            args=args + (queue_obj,), # Add queue to the arguments for the target
+            daemon=True
+        )
+        setattr(self, thread_attr, thread) # Store thread object
+        thread.start()
+
+        # 3. Start checking the queue using the appropriate checker function
+        if queue_check_func:
+             self.after(100, queue_check_func)
+        else:
+             print(f"Warning: No queue check function provided for task on tab '{tab_name}'")
+             # Reset UI if queue check won't happen
+             button_widget.config(state=tk.NORMAL)
+             if progressbar_widget and hasattr(self, progressbar_widget.winfo_name()):
+                 progressbar_widget.stop()
+                 progressbar_widget.grid_remove()
+
+        # Return thread object (optional, maybe not needed if stored)
+        # return thread
+
+
+    def _finalize_task_ui(self, button_widget, progressbar_widget):
+        """Resets button and progress bar state after task completion."""
+        # Check if widgets still exist before configuring
+        try:
+            if progressbar_widget and progressbar_widget.winfo_exists():
+                progressbar_widget.stop()
+                progressbar_widget.grid_remove()
+            if button_widget and button_widget.winfo_exists():
+                button_widget.config(state=tk.NORMAL)
+        except tk.TclError:
+             print("Warning: Error finalizing task UI (widget might be destroyed).")
+
+
+    # --- Refactored Trigger Methods ---
+
+    def _generate_snapshot(self):
+        """Handles the 'Generate / Regenerate Map' button click using thread helper."""
+        source_dir = self.snapshot_dir_var.get()
+        if not source_dir or not Path(source_dir).is_dir():
+            messagebox.showwarning("Input Required", "Please select a valid source directory.")
+            self._update_status("Snapshot failed: Invalid source directory.", is_error=True, tab=self.TAB_SNAPSHOT)
+            return
+
+        custom_ignores_str = self.snapshot_ignore_var.get()
+        custom_ignores = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else None
+
+        # Clear previous output immediately
+        self.snapshot_map_output.config(state=tk.NORMAL)
+        self.snapshot_map_output.delete('1.0', tk.END)
+
+        # Start background task
+        self._start_background_task(
+            target_func=self._snapshot_thread_target,
+            args=(source_dir, custom_ignores),
+            queue_obj=self.snapshot_queue,
+            button_widget=self.snapshot_regenerate_button,
+            progressbar_widget=self.snapshot_progress_bar,
+            status_msg="Generating map...",
+            tab_name=self.TAB_SNAPSHOT,
+            progress_mode='indeterminate',
+            queue_check_func=self._check_snapshot_queue
+        )
+
 
     def _create_structure(self):
-        """Handles the 'Create Structure' button click.
-        Starts the structure creation in a separate thread and manages progress bar.
-        """
-        # 1. Get Inputs & Validate (as before)
+        """Handles the 'Create Structure' button click using thread helper."""
         map_widget = self.scaffold_map_input
         map_text = map_widget.get('1.0', tk.END).strip()
         base_dir = self.scaffold_base_dir_var.get()
         format_hint = self.scaffold_format_var.get()
-        tag_name = "strikethrough"
+        tag_name = self.TAG_STRIKETHROUGH
 
+        # --- Input Validation ---
         if not map_text:
             messagebox.showwarning("Input Required", "Map input cannot be empty.")
-            self._update_status("Scaffold failed: Map input empty.", is_error=True, tab='scaffold')
+            self._update_status("Scaffold failed: Map input empty.", is_error=True, tab=self.TAB_SCAFFOLD)
             return
         if not base_dir or not Path(base_dir).is_dir():
              messagebox.showwarning("Input Required", "Please select a valid base directory.")
-             self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
+             self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab=self.TAB_SCAFFOLD)
              return
 
-        # --- Get Excluded Lines (as before) ---
+        # --- Get Excluded Lines ---
         excluded_line_numbers = set()
         try:
-            # ... (logic to populate excluded_line_numbers based on tags - same as before) ...
             last_line_index = map_widget.index('end-1c')
             if last_line_index:
                 num_lines = int(last_line_index.split('.')[0])
                 for i in range(1, num_lines + 1):
                     line_start = f"{i}.0"
-                    line_text = map_widget.get(line_start, f"{i}.end")
-                    stripped_text = line_text.strip()
-                    if not stripped_text: continue
-                    leading_spaces = len(line_text) - len(line_text.lstrip())
-                    content_start_index = f"{line_start} + {leading_spaces} chars"
-                    tags_on_content = map_widget.tag_names(content_start_index)
-                    if tag_name in tags_on_content:
-                        excluded_line_numbers.add(i)
+                    content_start_index, _ = self._get_content_range(widget=map_widget, line_start_index=line_start)
+                    if content_start_index:
+                        tags_on_content = map_widget.tag_names(content_start_index)
+                        if tag_name in tags_on_content:
+                            excluded_line_numbers.add(i)
         except tk.TclError as e:
-             # ... (error handling for tag reading - as before) ...
+             print(f"ERROR: Error reading tags during scaffold setup: {e}")
+             messagebox.showerror("Error", f"Error processing map exclusions:\n{e}")
+             self._update_status("Scaffold failed: Error processing exclusions.", is_error=True, tab=self.TAB_SCAFFOLD)
              return
-        # -------------------------------------
-        # --- Start Threading Logic ---
-        # 2. Prepare UI for processing
-        self.scaffold_create_button.config(state=tk.DISABLED) # Disable button
-        self.scaffold_open_folder_button.grid_remove() # Ensure open button is hidden
-        self.last_scaffold_path = None # Reset last path
-        self.scaffold_progress_bar['value'] = 0 # Reset progress bar
-        self.scaffold_progress_bar['mode'] = 'determinate' # Assuming determinate for scaffold
-        # Calculate total steps (approximate: number of lines to potentially process)
-        # A more accurate count will come from logic.py later
-        total_steps = len(map_text.splitlines()) # Initial estimate
-        if total_steps > 0 :
-             self.scaffold_progress_bar['maximum'] = total_steps
-        self.scaffold_progress_bar.grid() # Show progress bar
-        self.update_idletasks() # <<<--- THIS LINE ---<<<
-        self._update_status("Processing...", tab='scaffold')
 
-        # 3. Create and Start the thread
-        self.scaffold_thread = threading.Thread(
-            target=self._scaffold_thread_target,
-            args=(map_text, base_dir, format_hint, excluded_line_numbers, self.scaffold_queue),
-            daemon=True # Allows app to exit even if thread is running (optional)
+        # --- Prep UI ---
+        self.scaffold_open_folder_button.grid_remove()
+        self.last_scaffold_path = None
+
+        # --- Start Background Task ---
+        self.scaffold_thread = self._start_background_task(
+            target_func=self._scaffold_thread_target,
+            args=(map_text, base_dir, format_hint, excluded_line_numbers),
+            queue_obj=self.scaffold_queue,
+            button_widget=self.scaffold_create_button,
+            progressbar_widget=self.scaffold_progress_bar,
+            status_msg="Processing...",
+            tab_name=self.TAB_SCAFFOLD,
+            progress_mode='determinate',
+            queue_check_func=self._check_scaffold_queue
         )
-        self.scaffold_thread.start()
-        # 4. Start checking the queue
-        self.after(100, self._check_scaffold_queue) # Check queue every 100ms
+        # Set initial maximum for progress bar
+        try:
+            # Check if progress bar exists before setting max
+            if hasattr(self, 'scaffold_progress_bar') and self.scaffold_progress_bar.winfo_exists():
+                 total_steps = len(map_text.splitlines()) - len(excluded_line_numbers)
+                 self.scaffold_progress_bar['maximum'] = max(1, total_steps)
+        except tk.TclError:
+             print("Warning: Could not set progress bar maximum (widget destroyed?).")
 
-# In dirmapper/app.py -> DirMapperApp class
 
-    def _scaffold_thread_target(self, map_text, base_dir, format_hint, excluded_lines, q): # 'q' is the queue object
+    # --- Thread Target Functions ---
+    def _snapshot_thread_target(self, source_dir, custom_ignores, q):
+        """Calls the snapshot logic and puts result in queue."""
+        try:
+            map_result = logic.create_directory_snapshot(source_dir, custom_ignores)
+            success = not map_result.startswith("Error:")
+            q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'map_text': map_result})
+        except Exception as e:
+             q.put({'type': self.QUEUE_MSG_RESULT, 'success': False, 'map_text': f"Error in thread: {e}"})
+             print(f"--- Error in Snapshot Thread: {e} ---")
+             # import traceback; traceback.print_exc() # Keep commented unless debugging
+
+    def _scaffold_thread_target(self, map_text, base_dir, format_hint, excluded_lines, q):
         """Calls the backend logic and puts result/progress in queue."""
         try:
-            # --- Ensure queue is passed here ---
             msg, success = logic.create_structure_from_map(
-                 map_text,
-                 base_dir,
-                 format_hint,
-                 excluded_lines=excluded_lines,
-                 queue=q # <<<--- MAKE SURE THIS ARGUMENT IS PRESENT AND UNCOMMENTED
+                 map_text, base_dir, format_hint,
+                 excluded_lines=excluded_lines, queue=q
             )
-            # Add a slight delay before putting the final result,
-            # ensuring any final progress messages get processed first by the UI loop (optional)
+            q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'message': msg})
+        except Exception as e:
+            q.put({'type': self.QUEUE_MSG_RESULT, 'success': False, 'message': f"Error in thread: {e}"})
+            print(f"--- Error in Scaffold Thread: {e} ---")
+            # import traceback; traceback.print_exc()
 
-            q.put({'type': 'result', 'success': success, 'message': msg})
+
+    # --- Queue Checking Functions ---
+
+    def _check_snapshot_queue(self):
+        """Checks queue for messages from snapshot thread and updates UI."""
+        try:
+            while True: # Process all messages
+                msg = self.snapshot_queue.get_nowait()
+                msg_type = msg.get('type')
+
+                if msg_type == self.QUEUE_MSG_RESULT:
+                    success = msg['success']
+                    map_text_result = msg['map_text']
+
+                    # Update text area first
+                    try: # Protect against widget destruction
+                         if self.snapshot_map_output.winfo_exists():
+                              self.snapshot_map_output.config(state=tk.NORMAL)
+                              self.snapshot_map_output.delete('1.0', tk.END)
+                              self.snapshot_map_output.insert('1.0', map_text_result)
+                              self.snapshot_map_output.tag_remove(self.TAG_STRIKETHROUGH, '1.0', tk.END)
+                    except tk.TclError: pass
+
+                    # Update status & handle auto-copy
+                    status_msg = "Map generated." if success else map_text_result
+                    if success:
+                        if self.snapshot_auto_copy_var.get():
+                            copied_ok = self._copy_snapshot_to_clipboard(show_status=False)
+                            status_msg = "Map generated and copied." if copied_ok else "Map generated (auto-copy failed)."
+                    self._update_status(status_msg, is_error=not success, is_success=success, tab=self.TAB_SNAPSHOT)
+
+                    # Finalize UI
+                    self._finalize_task_ui(self.snapshot_regenerate_button, self.snapshot_progress_bar)
+                    return # Stop checking
+
+        except queue.Empty:
+            # Check if thread object exists and is alive
+            thread_obj = getattr(self, 'snapshot_thread', None)
+            if thread_obj and thread_obj.is_alive():
+                self.after(100, self._check_snapshot_queue)
+            else: # Thread finished unexpectedly or doesn't exist
+                # print("Warning: Snapshot thread finished but queue check found no result or thread missing.")
+                self._finalize_task_ui(self.snapshot_regenerate_button, self.snapshot_progress_bar)
 
         except Exception as e:
-             q.put({'type': 'result', 'success': False, 'message': f"Error in thread: {e}"})
-             import traceback
-             print("--- Error in Scaffold Thread ---")
-             traceback.print_exc()
-             print("------------------------------")
-
-
+            print(f"ERROR: Exception in _check_snapshot_queue: {e}")
+            import traceback; traceback.print_exc()
+            self._finalize_task_ui(self.snapshot_regenerate_button, self.snapshot_progress_bar)
+            self._update_status(f"UI Error during snapshot processing: {e}", is_error=True, tab=self.TAB_SNAPSHOT)
 
 
     def _check_scaffold_queue(self):
         """Checks queue for messages from scaffold thread and updates UI."""
         try:
-            while True: # Process all messages currently in queue
+            while True: # Process all messages
                 msg = self.scaffold_queue.get_nowait()
-                if msg['type'] == 'progress':
-                    # --- Handle progress updates (when logic.py sends them) ---
-                    current = msg.get('current', 0)
-                    total = msg.get('total', self.scaffold_progress_bar['maximum'])
-                    if total > 0:
-                         self.scaffold_progress_bar['maximum'] = total
-                         self.scaffold_progress_bar['value'] = current
-                         # Optional: Update status text too
-                         # percentage = int((current / total) * 100)
-                         # self._update_status(f"Processing... {percentage}%", tab='scaffold')
-                    else: # If total is 0, maybe switch to indeterminate?
-                         self.scaffold_progress_bar['mode'] = 'indeterminate'
-                         self.scaffold_progress_bar.start()
+                msg_type = msg.get('type')
 
-                elif msg['type'] == 'result':
-                    
-                    # --- Handle final result ---
+                if msg_type == self.QUEUE_MSG_PROGRESS:
+                    # --- Handle Progress ---
+                    current = msg.get('current', 0)
+                    total = msg.get('total', self.scaffold_progress_bar.cget('maximum'))
+                    try: # Protect against widget errors
+                         if total > 0:
+                              if self.scaffold_progress_bar['mode'] != 'determinate':
+                                   self.scaffold_progress_bar.stop(); self.scaffold_progress_bar['mode'] = 'determinate'
+                              self.scaffold_progress_bar['maximum'] = total
+                              self.scaffold_progress_bar['value'] = current
+                         else: # Fallback to indeterminate
+                              if self.scaffold_progress_bar['mode'] != 'indeterminate':
+                                   self.scaffold_progress_bar['mode'] = 'indeterminate'
+                                   if self.scaffold_progress_bar.winfo_ismapped(): self.scaffold_progress_bar.start()
+                    except tk.TclError: pass # Ignore if widget destroyed
+                    # --- End Handle Progress ---
+
+                elif msg_type == self.QUEUE_MSG_RESULT:
                     success = msg['success']
                     message = msg['message']
 
-                    self._update_status(message, is_error=not success, is_success=success, tab='scaffold')
-                    self.scaffold_progress_bar.stop() # Stop animation if indeterminate
-                    self.scaffold_progress_bar.grid_remove() # Hide progress bar
-                    self.scaffold_create_button.config(state=tk.NORMAL) # Re-enable button
-
-
-
-                    # Process success state (show open button, etc.) - same logic as before
+                    # Update status first
+                    self._update_status(message, is_error=not success, is_success=success, tab=self.TAB_SCAFFOLD)
+                    # Finalize common UI elements
+                    self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
+                    # Handle specific success action
                     if success:
-                        try:
-                            # Get original map text again if needed, or pass base_dir/root_name from thread
-                            map_text = self.scaffold_map_input.get('1.0', tk.END).strip() # Get fresh copy
-                            base_dir = self.scaffold_base_dir_var.get()
-                            created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-                            safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
-                            if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
-
-                            if created_root_name:
-                                full_path = Path(base_dir) / safe_root_name
-                                if full_path.is_dir():
-                                    self.last_scaffold_path = full_path
-                                    self.scaffold_open_folder_button.grid() # Show button
-                                else: # Should not happen if success is True, but safety check
-                                     print(f"Warning: Scaffold thread reported success, but path not found: {full_path}")
-                                     self._update_status(f"{message} (Warning: Output path check failed!)", is_success=True, tab='scaffold') # Still show success
-                            # else case for not finding root name... (as before)
-
-                        except Exception as e:
-                             # Handle error determining success path (as before)
-                             print(f"Warning: Error processing success state in queue check: {e}")
-                             self._update_status(f"{message} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
-                             self.last_scaffold_path = None
-
-                    return # Stop checking queue once result is processed
+                        self._show_open_folder_button(message)
+                    return # Stop checking queue
 
         except queue.Empty:
-            # Queue is empty, check again later if thread is still alive
-            if self.scaffold_thread.is_alive():
+            thread_obj = getattr(self, 'scaffold_thread', None)
+            if thread_obj and thread_obj.is_alive():
                 self.after(100, self._check_scaffold_queue)
-            else:
-                # Thread finished unexpectedly without putting result?
-                print("Warning: Scaffold thread finished but queue check found no result.")
-                self.scaffold_progress_bar.stop()
-                self.scaffold_progress_bar.grid_remove()
-                self.scaffold_create_button.config(state=tk.NORMAL)
-                # Optionally update status to indicate potential issue
-                # self._update_status("Processing finished unexpectedly.", is_error=True, tab='scaffold')
+            else: # Thread finished unexpectedly or doesn't exist
+                # print("Warning: Scaffold thread finished but queue check found no result or thread missing.")
+                self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
 
         except Exception as e:
-            # Handle unexpected errors in the queue checking logic itself
             print(f"ERROR: Exception in _check_scaffold_queue: {e}")
-            import traceback
-            traceback.print_exc()
-            self.scaffold_progress_bar.stop()
-            self.scaffold_progress_bar.grid_remove()
-            self.scaffold_create_button.config(state=tk.NORMAL)
-            self._update_status(f"UI Error during processing: {e}", is_error=True, tab='scaffold')
+            import traceback; traceback.print_exc()
+            self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
+            self._update_status(f"UI Error during processing: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
+
+
+    def _show_open_folder_button(self, success_message):
+         """Determines path from success message and shows button if valid."""
+         try:
+              base_dir = self.scaffold_base_dir_var.get()
+              map_text = self.scaffold_map_input.get('1.0', tk.END).strip()
+              if not base_dir or not map_text: return
+
+              created_root_name = map_text.splitlines()[0].strip().rstrip('/')
+              safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
+              if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
+
+              if created_root_name:
+                   full_path = Path(base_dir) / safe_root_name
+                   if full_path.is_dir():
+                       self.last_scaffold_path = full_path
+                       # Check button still exists before gridding
+                       if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
+                            self.scaffold_open_folder_button.grid()
+                   else:
+                       print(f"Warning: Scaffold reported success, but path not found: {full_path}")
+                       self._update_status(f"{success_message} (Warning: Output path check failed!)", is_success=True, tab=self.TAB_SCAFFOLD)
+              else:
+                   print("Warning: Could not determine created root folder name from map.")
+                   self._update_status(f"{success_message} (Warning: Couldn't determine output root name)", is_success=True, tab=self.TAB_SCAFFOLD)
+
+         except tk.TclError: pass # Widget destroyed
+         except Exception as e:
+              print(f"Warning: Error processing success state for open button: {e}")
+              self._update_status(f"{success_message} (Info: Could not enable 'Open Folder' button)", is_success=True, tab=self.TAB_SCAFFOLD)
+              self.last_scaffold_path = None
+
 
     def _open_last_scaffold_folder(self):
         """Opens the last successfully created scaffold output folder."""
         if not self.last_scaffold_path:
-            self._update_status("No scaffold output folder recorded.", is_error=True, tab='scaffold')
+            self._update_status("No scaffold output folder recorded.", is_error=True, tab=self.TAB_SCAFFOLD)
             return
 
-        path_to_open = Path(self.last_scaffold_path) # Ensure it's a Path object
+        path_to_open = Path(self.last_scaffold_path)
         if not path_to_open.is_dir():
-            # Maybe the base dir was stored if root couldn't be determined? Check that.
-            if self.last_scaffold_path.is_dir():
-                path_to_open = self.last_scaffold_path # Open base dir instead
-            else:
-                self._update_status(f"Output folder not found: {self.last_scaffold_path}", is_error=True, tab='scaffold')
-                return
+             self._update_status(f"Output folder not found: {self.last_scaffold_path}", is_error=True, tab=self.TAB_SCAFFOLD)
+             return
 
         path_str = str(path_to_open)
         try:
-            print(f"Info: Attempting to open folder: {path_str}") # Use Info level
+            print(f"Info: Attempting to open folder: {path_str}")
             if sys.platform == "win32":
                 os.startfile(path_str)
             elif sys.platform == "darwin": # macOS
                 subprocess.run(['open', path_str], check=True)
             else: # Linux and other POSIX variants
                 subprocess.run(['xdg-open', path_str], check=True)
-            # Update status only on successful command execution (or assumed success for startfile)
-            self._update_status(f"Opened folder: {path_to_open.name}", is_success=True, tab='scaffold')
+            self._update_status(f"Opened folder: {path_to_open.name}", is_success=True, tab=self.TAB_SCAFFOLD)
 
         except FileNotFoundError:
-            err_msg = f"Could not find command ('open' or 'xdg-open') to open folder for platform {sys.platform}."
-            messagebox.showerror("Error", err_msg)
-            self._update_status("Error opening folder: command not found.", is_error=True, tab='scaffold')
+             err_msg = f"Cmd not found for platform {sys.platform}."
+             messagebox.showerror("Error opening folder", err_msg)
+             self._update_status("Error opening folder: command not found.", is_error=True, tab=self.TAB_SCAFFOLD)
         except subprocess.CalledProcessError as e:
-            err_msg = f"System command failed to open folder:\n{e}"
-            messagebox.showerror("Error", err_msg)
-            self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
+              err_msg = f"System command failed: {e}"
+              messagebox.showerror("Error opening folder", err_msg)
+              self._update_status(f"Error opening folder: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
         except Exception as e:
             err_msg = f"Could not open folder '{path_to_open.name}':\n{e}"
-            messagebox.showerror("Error", err_msg)
-            self._update_status(f"Error opening folder: {e}", is_error=True, tab='scaffold')
+            messagebox.showerror("Error opening folder", err_msg)
+            self._update_status(f"Error opening folder: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
 
 
 # --- Main execution block for testing the UI directly ---
@@ -1196,3 +1184,4 @@ if __name__ == '__main__':
             print(f"Cleaned up test dir: {test_scaffold_path}")
     except Exception as e:
         print(f"Could not clean up test dir: {e}")
+
