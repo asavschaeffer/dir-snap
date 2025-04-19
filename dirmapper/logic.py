@@ -116,7 +116,7 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None):
 
 # --- Main Public Function ---
 
-def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect", excluded_lines=None): # MODIFIED
+def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect", excluded_lines=None, queue=None):
     """
     Main scaffolding function. Parses map text based on format hint
     and creates the directory structure. Skips lines specified in excluded_lines.
@@ -150,7 +150,7 @@ def create_structure_from_map(map_text, base_dir_str, format_hint="Auto-Detect",
 
     # Call the structure creation function (create_structure_from_parsed doesn't need modification)
     try:
-        return create_structure_from_parsed(parsed_items, base_dir_str)
+        return create_structure_from_parsed(parsed_items, base_dir_str, queue=queue)
     except Exception as create_e:
         # ... (error handling remains the same) ...
         print(f"ERROR: Exception during structure creation: {create_e}")
@@ -266,9 +266,7 @@ def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False, exclude
         return None
 
     for line_num, line in enumerate(lines, start=1):
-        print(f"DEBUG Parser Line {line_num}: Checking against exclusions {excluded_lines}. Is excluded: {line_num in excluded_lines}. Line: '{line}'")
         if line_num in excluded_lines:
-            print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
             continue
 
         if not line.strip(): continue # Skip blank lines
@@ -290,11 +288,9 @@ def _parse_indent_based(map_text, spaces_per_level=None, use_tabs=False, exclude
         item_name = item_name_part.rstrip('/') if is_directory else item_name_part
 
         if not item_name:
-            # print(f"DEBUG PARSER: Skipping line {line_num} because item name is empty...") # Removed
             continue
 
         parsed_items.append((level, item_name, is_directory))
-        # We don't strictly need to pass line_num in the tuple anymore if filtering here
 
     if not parsed_items:
         print("Warning (_parse_indent_based): No parseable items found after processing all lines (check exclusions?).")
@@ -323,7 +319,6 @@ def _parse_tree_format(map_text, excluded_lines=None):
     for line_num, line in enumerate(lines, start=1):
         # MODIFIED: Check if line should be excluded BEFORE processing
         if line_num in excluded_lines:
-            # print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
             continue
 
         original_line = line
@@ -381,7 +376,6 @@ def _parse_generic_indent(map_text, excluded_lines=None):
     for line_num, line in enumerate(lines, start=1):
         # MODIFIED: Check if line should be excluded BEFORE processing
         if line_num in excluded_lines:
-            # print(f"DEBUG Parser: Skipping excluded line {line_num}: '{line}'") # Optional debug
             continue
 
         original_line = line
@@ -425,19 +419,22 @@ def _parse_generic_indent(map_text, excluded_lines=None):
 
     return parsed_items
 # --- Structure Creation Function ---
-def create_structure_from_parsed(parsed_items, base_dir_str):
+def create_structure_from_parsed(parsed_items, base_dir_str, queue=None):
     """
     Creates directory structure from parsed items list. (Cleaned Version)
     """
     base_dir = Path(base_dir_str).resolve()
     if not base_dir.is_dir(): return f"Error: Base directory '{base_dir_str}' is not valid.", False
-    if not parsed_items: return "Error: No items parsed from map.", False
 
     path_stack = [base_dir]
     created_root_name = "structure"
+    total_items = len(parsed_items)
 
     try:
         for i, (current_level, item_name, is_directory) in enumerate(parsed_items):
+            if queue:
+                # Put progress update just before processing the item
+                queue.put({'type': 'progress', 'current': i + 1, 'total': total_items})
             # Adjust stack depth
             target_stack_len = current_level + 1
             while len(path_stack) > target_stack_len:
@@ -485,6 +482,8 @@ def create_structure_from_parsed(parsed_items, base_dir_str):
         return f"Error creating structure for item '{failed_item}': {e}", False
 
     # Success
+    if queue:
+         queue.put({'type': 'progress', 'current': total_items, 'total': total_items})
     return f"Structure for '{created_root_name}' successfully created in '{base_dir}'", True
 
 

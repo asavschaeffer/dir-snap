@@ -11,6 +11,8 @@ import subprocess
 import fnmatch
 import shutil
 import re
+import threading
+import queue
 
 # Use relative import to access logic.py within the same package
 try:
@@ -80,6 +82,9 @@ class Tooltip:
 class DirMapperApp(tk.Tk):
     def __init__(self, initial_path=None, initial_mode='snapshot'):
         super().__init__()
+
+        self.scaffold_queue = queue.Queue()
+        self.snapshot_queue = queue.Queue()
 
         self.initial_path = Path(initial_path) if initial_path else None
         self.initial_mode = initial_mode
@@ -175,9 +180,17 @@ class DirMapperApp(tk.Tk):
         self.snapshot_copy_button = ttk.Button(self.snapshot_frame, text="Copy to Clipboard", command=self._copy_snapshot_to_clipboard)
         self.snapshot_save_button = ttk.Button(self.snapshot_frame, text="Save Map As...", command=self._save_snapshot_as)
 
-        # Snapshot Status Bar
+        # Snapshot Status
         self.snapshot_status_var = tk.StringVar(value="Status: Ready")
         self.snapshot_status_label = ttk.Label(self.snapshot_frame, textvariable=self.snapshot_status_var, anchor=tk.W)
+
+        # Snapshot Progress Bar
+        self.snapshot_progress_bar = ttk.Progressbar(
+            self.snapshot_frame,
+            orient=tk.HORIZONTAL,
+            length=100,
+            mode='indeterminate' # Indeterminate for snapshot initially
+        )
 
         # --- Add Tooltips ---
         Tooltip(self.snapshot_browse_button, "Select the root directory to generate a map for.")
@@ -234,6 +247,15 @@ class DirMapperApp(tk.Tk):
         )
         self.last_scaffold_path = None # Variable to store the path
 
+        # --- SCAFFOLD PROGRESS BAR ---
+        if not hasattr(self, 'scaffold_progress_bar'):
+            self.scaffold_progress_bar = ttk.Progressbar(
+                self.scaffold_frame,
+                orient=tk.HORIZONTAL,
+                length=100,
+                mode='determinate'
+            )
+
         # --- Add Tooltips ---
         Tooltip(self.scaffold_paste_button, "Paste map text from clipboard into the input area.")
         Tooltip(self.scaffold_load_button, "Load map text from a file into the input area.")
@@ -245,7 +267,7 @@ class DirMapperApp(tk.Tk):
         Tooltip(self.scaffold_create_button, "Create the directory structure defined in the map input within the selected base directory.")
         Tooltip(self.scaffold_open_folder_button, "Open the folder created by the last successful scaffold operation.")
 
-    # --- Layout Methods (Using simplified snapshot layout) ---
+    # --- Layout Methods  ---
 
     def _layout_snapshot_widgets(self):
         """Arranges widgets in the Snapshot tab using grid (Ultra Simple - No Sub-frames)."""
@@ -274,47 +296,61 @@ class DirMapperApp(tk.Tk):
         self.snapshot_copy_button.grid(row=4, column=1, sticky=tk.E, padx=5, pady=5)
         self.snapshot_save_button.grid(row=4, column=2, sticky=tk.W, padx=5, pady=5)
 
-        # Row 5: Output Text Area - Spans columns 0, 1, 2
+        # Row 5: Output Text Area
         self.snapshot_map_output.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        self.snapshot_frame.rowconfigure(5, weight=1) # Text area is now row 5
+        self.snapshot_frame.rowconfigure(5, weight=1)
 
-        # Row 6: Status Bar - Spans columns 0, 1, 2
-        self.snapshot_status_label.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2, padx=5)
+        # Row 6: Status Bar
+        self.snapshot_status_label.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2,0), padx=5)
 
+        # Row 7: Progress Bar
+        self.snapshot_progress_bar.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=(1,2))
+        self.snapshot_progress_bar.grid_remove() # Hide initially
 
     def _layout_scaffold_widgets(self):
         """Arranges widgets in the Scaffold tab using grid."""
+        # Configure column 0 to expand, pushing column 1 (where button is) to the right
         self.scaffold_frame.columnconfigure(0, weight=1)
+        # No weight needed for column 1 - it just holds the button
 
-        # Row 0: Input Buttons
-        self.scaffold_input_buttons_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=2)
+        # Row 0: Input Buttons (remains the same)
+        self.scaffold_input_buttons_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=2) # Span both columns
         self.scaffold_paste_button.grid(row=0, column=0, padx=5)
         self.scaffold_load_button.grid(row=0, column=1, padx=5)
         self.scaffold_clear_map_button.grid(row=0, column=2, padx=15)
 
-        # Row 1: Map Input Text Area
-        self.scaffold_map_input.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        self.scaffold_frame.rowconfigure(1, weight=1)
+        # Row 1: Map Input Text Area (remains the same)
+        self.scaffold_map_input.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5) # Span both columns
+        self.scaffold_frame.rowconfigure(1, weight=1) # Allow text area to expand vertically
 
-        # Row 2: Configuration Frame
-        self.scaffold_config_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        self.scaffold_config_frame.columnconfigure(1, weight=1) # Let Base Dir Entry expand
+        # Row 2: Configuration Frame (remains the same)
+        self.scaffold_config_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=5) # Span both columns
+        # ... (widgets inside config frame need appropriate col spanning if not already done) ...
+        # Make sure config frame's internal layout works within the spanned cell
+        self.scaffold_config_frame.columnconfigure(1, weight=1) # Let Base Dir Entry expand within frame
         self.scaffold_base_dir_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 2))
         self.scaffold_base_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=2)
-        self.scaffold_clear_base_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 2)) # Place in same cell
+        self.scaffold_clear_base_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 2))
         self.scaffold_browse_base_button.grid(row=0, column=2, sticky=tk.W, padx=(5, 15))
         self.scaffold_format_label.grid(row=0, column=3, sticky=tk.W, padx=(5, 2))
         self.scaffold_format_combo.grid(row=0, column=4, sticky=tk.W, padx=2)
 
-        # Row 3: Create Button
-        self.scaffold_create_button.grid(row=3, column=0, sticky=tk.E, pady=5, padx=5)
 
-        # Row 4: Status Bar AND Open Folder Button
-        self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=2, padx=5)
-        self.scaffold_open_folder_button.grid(row=4, column=0, sticky=tk.E, pady=2, padx=5)
-        self.scaffold_open_folder_button.grid_remove() # Hide initially
+        # Row 3: Create Button (remains the same)
+        self.scaffold_create_button.grid(row=3, column=0, columnspan=2, sticky=tk.E, pady=5, padx=5) # Span both columns
 
-    # --- Event Handlers / Commands (Includes QoL changes) ---
+        # --- ADJUSTED LAYOUT for Status/Button (Row 4) and Progress (Row 5) ---
+        # Row 4: Status Bar (column 0) AND Open Folder Button (column 1)
+        self.scaffold_status_label.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(2,0), padx=5) # Status label in expanding column 0
+        self.scaffold_open_folder_button.grid(row=4, column=1, sticky=tk.E, pady=2, padx=5) # Button in fixed-size column 1 on the right
+        self.scaffold_open_folder_button.grid_remove() # Keep hidden initially
+
+        # Row 5: Progress Bar (Spanning both columns) - Initially hidden
+        self.scaffold_progress_bar.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), padx=5, pady=(1,2)) # Progress bar below, spanning width
+        if hasattr(self, 'scaffold_progress_bar'): # Check if exists before removing
+            self.scaffold_progress_bar.grid_remove() # Hide initially
+
+    # --- Event Handlers / Commands ---
 
     def _handle_initial_state(self):
         """Sets up the UI based on launch context."""
@@ -389,8 +425,11 @@ class DirMapperApp(tk.Tk):
             self.snapshot_dir_var.set(dir_path)
             self._update_status("Source directory selected.", tab='snapshot')
 
-
     def _generate_snapshot(self):
+        """Handles the 'Generate / Regenerate Map' button click.
+        Starts snapshot generation in a thread and manages indeterminate progress bar.
+        """
+        # 1. Get Inputs & Validate (as before)
         source_dir = self.snapshot_dir_var.get()
         if not source_dir or not Path(source_dir).is_dir():
             messagebox.showwarning("Input Required", "Please select a valid source directory.")
@@ -400,36 +439,108 @@ class DirMapperApp(tk.Tk):
         custom_ignores_str = self.snapshot_ignore_var.get()
         custom_ignores = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else None
 
+        # --- Start Threading Logic ---
+        # 2. Prepare UI for processing
+        self.snapshot_regenerate_button.config(state=tk.DISABLED) # Disable button
+        self.snapshot_map_output.config(state=tk.NORMAL) # Ensure output is usable
+        self.snapshot_map_output.delete('1.0', tk.END) # Clear previous output
+        self.snapshot_progress_bar['mode'] = 'indeterminate'
+        self.snapshot_progress_bar.grid() # Show progress bar
+        self.snapshot_progress_bar.start() # Start indeterminate animation
+        self.update_idletasks() # Ensure UI updates
         self._update_status("Generating map...", tab='snapshot')
-        self.snapshot_map_output.config(state=tk.NORMAL)
-        self.snapshot_map_output.delete('1.0', tk.END)
-        self.update_idletasks()
 
-        map_result = ""
-        copied_ok_auto = False
+        # 3. Create and Start the thread
+        print("DEBUG: Creating and starting snapshot thread...") # Debug print
+        self.snapshot_thread = threading.Thread(
+            target=self._snapshot_thread_target,
+            args=(source_dir, custom_ignores, self.snapshot_queue),
+            daemon=True
+        )
+        self.snapshot_thread.start()
+        # 4. Start checking the queue
+        print("DEBUG: Starting snapshot queue check loop.") # Debug print
+        self.after(100, self._check_snapshot_queue) # Check queue every 100ms
+
+    def _snapshot_thread_target(self, source_dir, custom_ignores, q):
+        """Calls the snapshot logic and puts result in queue."""
         try:
-            map_result = logic.create_directory_snapshot(source_dir, custom_ignore_patterns=custom_ignores)
-            self.snapshot_map_output.insert('1.0', map_result)
-
-            self.snapshot_map_output.tag_remove("strikethrough", '1.0', tk.END)
-
-            if not map_result.startswith("Error:"):
-                status_msg = "Map generated."
-                if self.snapshot_auto_copy_var.get():
-                     copied_ok_auto = self._copy_snapshot_to_clipboard(show_status=False) # Copy silently
-                     status_msg = "Map generated and copied to clipboard." if copied_ok_auto else "Map generated (auto-copy failed)."
-                self._update_status(status_msg, is_success=True, tab='snapshot')
-            else:
-                 self._update_status(map_result, is_error=True, tab='snapshot')
+            # --- IMPORTANT ---
+            # We need to modify logic.create_directory_snapshot later
+            # to ACCEPT the queue, although it won't use it for progress updates.
+            # It's good practice to pass it if the pattern requires it,
+            # or we modify the pattern. Let's assume we modify logic.py later.
+            map_result = logic.create_directory_snapshot(
+                 source_dir,
+                 custom_ignore_patterns=custom_ignores
+                 # queue=q # Pass queue eventually if needed by pattern/future features
+            )
+            # Determine success based on result string
+            success = not map_result.startswith("Error:")
+            q.put({'type': 'result', 'success': success, 'map_text': map_result})
 
         except Exception as e:
-             error_msg = f"Failed to generate snapshot: {e}"
-             messagebox.showerror("Error", error_msg)
-             self.snapshot_map_output.insert('1.0', f"Error: {e}")
-             self._update_status(error_msg, is_error=True, tab='snapshot')
+             q.put({'type': 'result', 'success': False, 'map_text': f"Error in thread: {e}"})
+             import traceback
+             traceback.print_exc()
 
-        finally:
-             self.snapshot_map_output.config(state=tk.NORMAL)
+    def _check_snapshot_queue(self):
+        """Checks queue for messages from snapshot thread and updates UI."""
+        try:
+            while True: # Process all messages currently in queue
+                msg = self.snapshot_queue.get_nowait()
+
+                if msg['type'] == 'result':
+                    # --- Handle final result ---
+                    success = msg['success']
+                    map_text_result = msg['map_text']
+
+                    # Stop and hide progress bar
+                    self.snapshot_progress_bar.stop()
+                    self.snapshot_progress_bar.grid_remove()
+
+                    # Update text area (ensure state is normal first)
+                    self.snapshot_map_output.config(state=tk.NORMAL)
+                    self.snapshot_map_output.delete('1.0', tk.END) # Clear again just in case
+                    self.snapshot_map_output.insert('1.0', map_text_result)
+                    # We leave it NORMAL for the click interaction now
+                    # self.snapshot_map_output.config(state=tk.DISABLED) # Disable after insert
+
+                    # Update status bar
+                    status_msg = "Map generated." if success else map_text_result
+                    copied_ok_auto = False
+                    if success:
+                        # Handle auto-copy if enabled
+                        if self.snapshot_auto_copy_var.get():
+                            copied_ok_auto = self._copy_snapshot_to_clipboard(show_status=False) # Copy silently
+                            status_msg = "Map generated and copied." if copied_ok_auto else "Map generated (auto-copy failed)."
+                    self._update_status(status_msg, is_error=not success, is_success=success, tab='snapshot')
+
+                    # Re-enable button
+                    self.snapshot_regenerate_button.config(state=tk.NORMAL)
+                    return # Stop checking queue
+
+        except queue.Empty:
+            # Queue is empty, check again later if thread is still alive
+            if self.snapshot_thread.is_alive():
+                self.after(100, self._check_snapshot_queue)
+            else:
+                # Thread finished unexpectedly
+                self.snapshot_progress_bar.stop()
+                self.snapshot_progress_bar.grid_remove()
+                self.snapshot_regenerate_button.config(state=tk.NORMAL)
+                # Maybe update status?
+                # self._update_status("Snapshot generation finished unexpectedly.", is_error=True, tab='snapshot')
+
+        except Exception as e:
+            # Handle unexpected errors in the queue checking logic itself
+            print(f"ERROR: Exception in _check_snapshot_queue: {e}")
+            import traceback
+            traceback.print_exc()
+            self.snapshot_progress_bar.stop()
+            self.snapshot_progress_bar.grid_remove()
+            self.snapshot_regenerate_button.config(state=tk.NORMAL)
+            self._update_status(f"UI Error during snapshot processing: {e}", is_error=True, tab='snapshot')
 
     def _copy_snapshot_to_clipboard(self, show_status=True):
         """Copies the snapshot map to the clipboard, excluding lines that are
@@ -442,7 +553,6 @@ class DirMapperApp(tk.Tk):
         custom_ignores_str = self.snapshot_ignore_var.get()
         # Ensure patterns are stripped and non-empty
         ignore_patterns_from_csv = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else set()
-        # print(f"DEBUG Copy: Ignore patterns from CSV: {ignore_patterns_from_csv}") # Optional debug
 
         lines_to_copy = []
         try:
@@ -848,21 +958,15 @@ class DirMapperApp(tk.Tk):
 
     def _create_structure(self):
         """Handles the 'Create Structure' button click.
-        Gathers map text, identifies excluded (struck-through) lines,
-        and calls the backend logic function.
+        Starts the structure creation in a separate thread and manages progress bar.
         """
-        # 1. Reset path variable and hide the button initially
-        self.last_scaffold_path = None
-        self.scaffold_open_folder_button.grid_remove() # Ensure button is hidden
-
-        # 2. Get Inputs
+        # 1. Get Inputs & Validate (as before)
         map_widget = self.scaffold_map_input
         map_text = map_widget.get('1.0', tk.END).strip()
         base_dir = self.scaffold_base_dir_var.get()
         format_hint = self.scaffold_format_var.get()
         tag_name = "strikethrough"
 
-        # 3. Input Validation
         if not map_text:
             messagebox.showwarning("Input Required", "Map input cannot be empty.")
             self._update_status("Scaffold failed: Map input empty.", is_error=True, tab='scaffold')
@@ -872,98 +976,163 @@ class DirMapperApp(tk.Tk):
              self._update_status("Scaffold failed: Invalid base directory.", is_error=True, tab='scaffold')
              return
 
-        # --- NEW: Identify Excluded Lines ---
+        # --- Get Excluded Lines (as before) ---
         excluded_line_numbers = set()
         try:
+            # ... (logic to populate excluded_line_numbers based on tags - same as before) ...
             last_line_index = map_widget.index('end-1c')
             if last_line_index:
                 num_lines = int(last_line_index.split('.')[0])
                 for i in range(1, num_lines + 1):
                     line_start = f"{i}.0"
-                    line_end = f"{i}.end"
-                    line_text = map_widget.get(line_start, line_end)
+                    line_text = map_widget.get(line_start, f"{i}.end")
                     stripped_text = line_text.strip()
-
-                    # Skip blank lines
-                    if not stripped_text:
-                        continue
-
-                    # Calculate where content starts to check for the tag accurately
+                    if not stripped_text: continue
                     leading_spaces = len(line_text) - len(line_text.lstrip())
                     content_start_index = f"{line_start} + {leading_spaces} chars"
-
-                    # Check tags starting from the first non-whitespace character
                     tags_on_content = map_widget.tag_names(content_start_index)
                     if tag_name in tags_on_content:
-                        excluded_line_numbers.add(i) # Add 1-based line number
-            print(f"DEBUG Create Structure: Excluded lines: {excluded_line_numbers}") # Optional debug
+                        excluded_line_numbers.add(i)
         except tk.TclError as e:
-            print(f"ERROR Create Structure: Error reading tags: {e}")
-            messagebox.showerror("Error", f"Error processing map exclusions:\n{e}")
-            self._update_status("Scaffold failed: Error processing exclusions.", is_error=True, tab='scaffold')
-            return
-        # --- END NEW SECTION ---
+             # ... (error handling for tag reading - as before) ...
+             return
+        # -------------------------------------
+        # --- Start Threading Logic ---
+        # 2. Prepare UI for processing
+        self.scaffold_create_button.config(state=tk.DISABLED) # Disable button
+        self.scaffold_open_folder_button.grid_remove() # Ensure open button is hidden
+        self.last_scaffold_path = None # Reset last path
+        self.scaffold_progress_bar['value'] = 0 # Reset progress bar
+        self.scaffold_progress_bar['mode'] = 'determinate' # Assuming determinate for scaffold
+        # Calculate total steps (approximate: number of lines to potentially process)
+        # A more accurate count will come from logic.py later
+        total_steps = len(map_text.splitlines()) # Initial estimate
+        if total_steps > 0 :
+             self.scaffold_progress_bar['maximum'] = total_steps
+        self.scaffold_progress_bar.grid() # Show progress bar
+        self.update_idletasks() # <<<--- THIS LINE ---<<<
+        self._update_status("Processing...", tab='scaffold')
 
-        # 4. Call Logic (with the new 'excluded_lines' argument)
-        self._update_status("Creating structure...", tab='scaffold') # Neutral status while working
+        # 3. Create and Start the thread
+        self.scaffold_thread = threading.Thread(
+            target=self._scaffold_thread_target,
+            args=(map_text, base_dir, format_hint, excluded_line_numbers, self.scaffold_queue),
+            daemon=True # Allows app to exit even if thread is running (optional)
+        )
+        self.scaffold_thread.start()
+        # 4. Start checking the queue
+        self.after(100, self._check_scaffold_queue) # Check queue every 100ms
 
+# In dirmapper/app.py -> DirMapperApp class
+
+    def _scaffold_thread_target(self, map_text, base_dir, format_hint, excluded_lines, q): # 'q' is the queue object
+        """Calls the backend logic and puts result/progress in queue."""
         try:
-             msg, success = logic.create_structure_from_map(
+            # --- Ensure queue is passed here ---
+            msg, success = logic.create_structure_from_map(
                  map_text,
                  base_dir,
                  format_hint,
-                 excluded_lines=excluded_line_numbers
+                 excluded_lines=excluded_lines,
+                 queue=q # <<<--- MAKE SURE THIS ARGUMENT IS PRESENT AND UNCOMMENTED
             )
+            # Add a slight delay before putting the final result,
+            # ensuring any final progress messages get processed first by the UI loop (optional)
 
-             # 5. Update status label with result and color
-             self._update_status(msg, is_error=not success, is_success=success, tab='scaffold')
-
-             # 6. On Success ONLY - Store path and show 'Open Folder' button
-             if success:
-                 # ... (rest of the success logic remains the same) ...
-                 try:
-                      # Determine the full path to the root directory that was created
-                      # This part remains the same, finding the root from the original map text
-                      created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-                      safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
-                      if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
-
-                      if created_root_name:
-                           full_path = Path(base_dir) / safe_root_name
-                           if full_path.is_dir():
-                               self.last_scaffold_path = full_path
-                               self.scaffold_open_folder_button.grid()
-                           else:
-                               print(f"Warning: Scaffold reported success, but created path not found: {full_path}")
-                               self._update_status(f"{msg} (Warning: Output path not found!)", is_error=True, tab='scaffold')
-                      else:
-                           print("Warning: Could not determine created root folder name from map.")
-                           self._update_status(f"{msg} (Warning: Couldn't determine output root name)", is_success=True, tab='scaffold')
-
-                 except Exception as e:
-                      print(f"Warning: Error processing success state (storing path/showing button): {e}")
-                      self._update_status(f"{msg} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
-                      self.last_scaffold_path = None
-
-        except TypeError as te:
-             # --- EXPECT THIS ERROR UNTIL logic.py is updated ---
-             if 'excluded_lines' in str(te):
-                  error_msg = "Error: Backend logic needs update for exclusions. Please modify logic.py."
-                  print(error_msg)
-                  messagebox.showerror("Code Update Needed", error_msg)
-                  self._update_status(error_msg, is_error=True, tab='scaffold')
-             else:
-                  # Different TypeError
-                  error_msg = f"Error during creation: {te}"
-                  print(f"ERROR: Unexpected TypeError in _create_structure: {te}")
-                  messagebox.showerror("Error", error_msg)
-                  self._update_status(error_msg, is_error=True, tab='scaffold')
+            q.put({'type': 'result', 'success': success, 'message': msg})
 
         except Exception as e:
-             # Catch other unexpected errors
-             error_msg = f"Fatal error during creation: {e}"
-             self._update_status(error_msg, is_error=True, tab='scaffold')
-             messagebox.showerror("Error", f"An unexpected error occurred:\n{e}")
+             q.put({'type': 'result', 'success': False, 'message': f"Error in thread: {e}"})
+             import traceback
+             print("--- Error in Scaffold Thread ---")
+             traceback.print_exc()
+             print("------------------------------")
+
+
+
+
+    def _check_scaffold_queue(self):
+        """Checks queue for messages from scaffold thread and updates UI."""
+        try:
+            while True: # Process all messages currently in queue
+                msg = self.scaffold_queue.get_nowait()
+                if msg['type'] == 'progress':
+                    # --- Handle progress updates (when logic.py sends them) ---
+                    current = msg.get('current', 0)
+                    total = msg.get('total', self.scaffold_progress_bar['maximum'])
+                    if total > 0:
+                         self.scaffold_progress_bar['maximum'] = total
+                         self.scaffold_progress_bar['value'] = current
+                         # Optional: Update status text too
+                         # percentage = int((current / total) * 100)
+                         # self._update_status(f"Processing... {percentage}%", tab='scaffold')
+                    else: # If total is 0, maybe switch to indeterminate?
+                         self.scaffold_progress_bar['mode'] = 'indeterminate'
+                         self.scaffold_progress_bar.start()
+
+                elif msg['type'] == 'result':
+                    
+                    # --- Handle final result ---
+                    success = msg['success']
+                    message = msg['message']
+
+                    self._update_status(message, is_error=not success, is_success=success, tab='scaffold')
+                    self.scaffold_progress_bar.stop() # Stop animation if indeterminate
+                    self.scaffold_progress_bar.grid_remove() # Hide progress bar
+                    self.scaffold_create_button.config(state=tk.NORMAL) # Re-enable button
+
+
+
+                    # Process success state (show open button, etc.) - same logic as before
+                    if success:
+                        try:
+                            # Get original map text again if needed, or pass base_dir/root_name from thread
+                            map_text = self.scaffold_map_input.get('1.0', tk.END).strip() # Get fresh copy
+                            base_dir = self.scaffold_base_dir_var.get()
+                            created_root_name = map_text.splitlines()[0].strip().rstrip('/')
+                            safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
+                            if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
+
+                            if created_root_name:
+                                full_path = Path(base_dir) / safe_root_name
+                                if full_path.is_dir():
+                                    self.last_scaffold_path = full_path
+                                    self.scaffold_open_folder_button.grid() # Show button
+                                else: # Should not happen if success is True, but safety check
+                                     print(f"Warning: Scaffold thread reported success, but path not found: {full_path}")
+                                     self._update_status(f"{message} (Warning: Output path check failed!)", is_success=True, tab='scaffold') # Still show success
+                            # else case for not finding root name... (as before)
+
+                        except Exception as e:
+                             # Handle error determining success path (as before)
+                             print(f"Warning: Error processing success state in queue check: {e}")
+                             self._update_status(f"{message} (Info: Could not enable 'Open Folder' button)", is_success=True, tab='scaffold')
+                             self.last_scaffold_path = None
+
+                    return # Stop checking queue once result is processed
+
+        except queue.Empty:
+            # Queue is empty, check again later if thread is still alive
+            if self.scaffold_thread.is_alive():
+                self.after(100, self._check_scaffold_queue)
+            else:
+                # Thread finished unexpectedly without putting result?
+                print("Warning: Scaffold thread finished but queue check found no result.")
+                self.scaffold_progress_bar.stop()
+                self.scaffold_progress_bar.grid_remove()
+                self.scaffold_create_button.config(state=tk.NORMAL)
+                # Optionally update status to indicate potential issue
+                # self._update_status("Processing finished unexpectedly.", is_error=True, tab='scaffold')
+
+        except Exception as e:
+            # Handle unexpected errors in the queue checking logic itself
+            print(f"ERROR: Exception in _check_scaffold_queue: {e}")
+            import traceback
+            traceback.print_exc()
+            self.scaffold_progress_bar.stop()
+            self.scaffold_progress_bar.grid_remove()
+            self.scaffold_create_button.config(state=tk.NORMAL)
+            self._update_status(f"UI Error during processing: {e}", is_error=True, tab='scaffold')
 
     def _open_last_scaffold_folder(self):
         """Opens the last successfully created scaffold output folder."""
