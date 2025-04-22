@@ -35,7 +35,7 @@ except ImportError:
             return None # Or raise an exception
         
 # --- Application Constants ---
-    APP_VERSION = "3.1.0" # Example version
+APP_VERSION = "3.1.0" # Example version
 
 # --- Tooltip Helper Class ---
 class Tooltip:
@@ -409,6 +409,24 @@ class DirSnapApp(tk.Tk):
         Tooltip(self.snapshot_ignore_entry, "Enter comma-separated names/patterns to ignore (e.g., .git, *.log, temp/)")
         Tooltip(self.snapshot_clear_ignore_button, "Clear custom ignores")
 
+        # --- Snapshot Format Widgets --- 
+        ttk.Label(frame, text="Output Format:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=3) # Grid positioning done here
+
+        self.snapshot_format_var = tk.StringVar(value="Standard Indent") # Default value
+        self.snapshot_format_options = ["Standard Indent", "Tree", "Tabs"] # Define options
+        self.snapshot_format_combo = ttk.Combobox(
+            frame, textvariable=self.snapshot_format_var,
+            values=self.snapshot_format_options,
+            state='readonly', width=18 # Adjusted width
+        )
+        Tooltip(self.snapshot_format_combo, "Select the output format for the snapshot map.")
+
+        self.snapshot_show_emojis_var = tk.BooleanVar(value=False) # Default value
+        self.snapshot_show_emojis_check = ttk.Checkbutton(
+            frame, text="Emojis 📁📄", variable=self.snapshot_show_emojis_var
+        )
+        Tooltip(self.snapshot_show_emojis_check, "If checked, prepend folder/file emojis to items in the map.")
+
         self.snapshot_regenerate_button = ttk.Button(frame, text="Generate / Regenerate Map", command=self._generate_snapshot)
         Tooltip(self.snapshot_regenerate_button, "Generate/Refresh the directory map based on current settings.")
 
@@ -491,43 +509,57 @@ class DirSnapApp(tk.Tk):
 
     # --- Layout Methods ---
 
-    def _layout_snapshot_widgets(self):
-        """Arranges widgets in the Snapshot tab using grid."""
-        frame = self.snapshot_frame
-        frame.columnconfigure(1, weight=1)
+# Inside DirSnapApp class in DirSnap/app.py
 
-        # Row 0: Source Directory (Labels already gridded in create)
-        self.snapshot_dir_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=3, padx=(0,5))
-        self.snapshot_clear_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 7))
+    def _layout_snapshot_widgets(self):
+        """Arranges widgets in the Snapshot tab using grid (REVISED LAYOUT v3)."""
+        frame = self.snapshot_frame
+
+        # --- Configure Grid Columns ---
+        # 0: Labels
+        # 1: Main Entry Fields / Controls (Expandable)
+        # 2: Browse Button / Right-aligned controls
+        frame.columnconfigure(1, weight=1) # Allow column 1 (entries) to expand
+
+        # --- Row 0: Source Directory ---
+        # Label created and gridded in _create_snapshot_widgets (assuming row=0, col=0, sticky=W)
+        self.snapshot_dir_entry.grid(row=0, column=1, sticky=tk.EW, pady=3, padx=(0, 5))
+        self.snapshot_clear_dir_button.grid(row=0, column=1, sticky=tk.E, padx=(0, 7)) # Overlay on entry
         self.snapshot_browse_button.grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
 
-        # Row 1: Custom Ignores Entry (Labels already gridded in create)
-        self.snapshot_ignore_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=3, padx=(0,5))
-        self.snapshot_clear_ignore_button.grid(row=1, column=1, sticky=tk.E, padx=(0, 7))
+        # --- Row 1: Custom Ignores ---
+        # Label created and gridded in _create_snapshot_widgets (assuming row=1, col=0, sticky=W)
+        self.snapshot_ignore_entry.grid(row=1, column=1, sticky=tk.EW, pady=3, padx=(0, 5))
+        self.snapshot_clear_ignore_button.grid(row=1, column=1, sticky=tk.E, padx=(0, 7)) # Overlay on entry
 
-        # Row 2: Default Ignores Info Label (already gridded in create)
+        # --- Row 2: Default Ignores Info ---
+        # Label created and gridded in _create_snapshot_widgets (assuming row=2, col=1, columnspan=2, sticky=W)
+        self.snapshot_default_ignores_label.grid(row=2, column=1, columnspan=2, sticky=tk.W, padx=7, pady=(0, 5))
 
-        # Row 3: Controls
-        self.snapshot_regenerate_button.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        self.snapshot_auto_copy_check.grid(row=3, column=1, sticky=tk.W, padx=15, pady=5)
+        # --- Row 3: Format Options ---
+        self.snapshot_format_combo.grid(row=3, column=1, sticky=tk.EW, pady=3, padx=(0, 5))
+        self.snapshot_show_emojis_check.grid(row=3, column=2, padx=(0, 10))
 
-        # Row 4: Action Buttons (Copy, Save) - Use grid inside a frame
-        button_frame = ttk.Frame(frame)
-        button_frame.grid(row=4, column=1, columnspan=2, sticky=tk.E, padx=5, pady=5)
-        # Use grid for buttons inside button_frame
-        self.snapshot_copy_button.grid(row=4, column=1, padx=(0, 5))
-        self.snapshot_save_button.grid(row=4, column=0)
+        # --- Row 4: Action Row ---
+        # Place buttons directly, maybe spanning columns is easier to manage
+        self.snapshot_regenerate_button.grid(row=4, column=0, sticky=tk.W, padx=5, pady=(10, 5))
+        self.snapshot_auto_copy_check.grid(row=4, column=1, columnspan=2, sticky=tk.E, padx=15, pady=(10, 5)) # Align right, span cols 1 & 2
 
-        # Row 5: Output Text Area
-        self.snapshot_map_output.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        frame.rowconfigure(5, weight=1)
+        # --- Row 5: Output Area ---
+        self.snapshot_map_output.grid(row=5, column=0, columnspan=3, sticky=tk.NSEW, padx=5, pady=5) # Span all 3 columns
+        frame.rowconfigure(5, weight=1) # Allow this row to expand vertically
 
-        # Row 6: Status Bar
-        self.snapshot_status_label.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(2,0), padx=5)
+        # --- Row 6: Bottom Bar (Status + Buttons) ---
+        # Place status label directly
+        self.snapshot_status_label.grid(row=6, column=0, columnspan=2, sticky=tk.EW, padx=5, pady=(2, 0)) # Span cols 0 & 1
 
-        # Row 7: Progress Bar
-        self.snapshot_progress_bar.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=(1,2))
-        self.snapshot_progress_bar.grid_remove()
+        # Place Copy/Save buttons directly, anchored to the right of the third column
+        self.snapshot_copy_button.grid(row=6, column=2, sticky=tk.E, padx=(0, 5), pady=(2,0))
+        self.snapshot_save_button.grid(row=6, column=3, sticky=tk.W, padx=(0, 5), pady=(2,0)) # Place Save next to Copy in col 3
+
+        # --- Row 7: Progress Bar ---
+        self.snapshot_progress_bar.grid(row=7, column=0, columnspan=4, sticky=tk.EW, padx=5, pady=(1, 2)) # Span 4 columns
+        self.snapshot_progress_bar.grid_remove() # Keep hidden initially
 
     def _layout_scaffold_widgets(self):
         """Arranges widgets in the Scaffold tab using grid."""
@@ -1111,14 +1143,19 @@ class DirSnapApp(tk.Tk):
         custom_ignores_str = self.snapshot_ignore_var.get()
         custom_ignores = set(p.strip() for p in custom_ignores_str.split(',') if p.strip()) if custom_ignores_str else None
 
+        # --- Get format and emoji settings ---
+        output_format = self.snapshot_format_var.get()
+        show_emojis = self.snapshot_show_emojis_var.get()
+
         # Clear previous output immediately
         self.snapshot_map_output.config(state=tk.NORMAL)
         self.snapshot_map_output.delete('1.0', tk.END)
+        self.snapshot_map_output.tag_remove(self.TAG_STRIKETHROUGH, '1.0', tk.END)
 
         # Start background task
         self._start_background_task(
             target_func=self._snapshot_thread_target,
-            args=(source_dir, custom_ignores, self.user_default_ignores),
+            args=(source_dir, custom_ignores, self.user_default_ignores, output_format, show_emojis),
             queue_obj=self.snapshot_queue,
             button_widget=self.snapshot_regenerate_button,
             progressbar_widget=self.snapshot_progress_bar,
@@ -1193,13 +1230,15 @@ class DirSnapApp(tk.Tk):
 
 
     # --- Thread Target Functions ---
-    def _snapshot_thread_target(self, source_dir, custom_ignores, user_ignores, q):
+    def _snapshot_thread_target(self, source_dir, custom_ignores, user_ignores, output_format, show_emojis, q):
         """Calls the snapshot logic and puts result in queue."""
         try:
             map_result = logic.create_directory_snapshot(
                 source_dir,
-                custom_ignore_patterns=custom_ignores,
-                user_default_ignores=user_ignores
+                custom_ignore_patterns=custom_ignores,                
+                user_default_ignores=user_ignores,
+                output_format=output_format,
+                show_emojis=show_emojis
             )
             success = not map_result.startswith("Error:")
             q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'map_text': map_result})
@@ -1209,18 +1248,22 @@ class DirSnapApp(tk.Tk):
              # import traceback; traceback.print_exc() # Keep commented unless debugging
 
     def _scaffold_thread_target(self, map_text, base_dir, format_hint, excluded_lines, q):
-        """Calls the backend logic and puts result/progress in queue."""
+        """Calls the backend logic and puts result/progress/root_name in queue."""
+        created_root_name = None # Initialize
         try:
-            msg, success = logic.create_structure_from_map(
+            # Capture all three return values from the logic function
+            msg, success, created_root_name = logic.create_structure_from_map(
                  map_text, base_dir, format_hint,
                  excluded_lines=excluded_lines, queue=q
             )
-            q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'message': msg})
+            # Include created_root_name in the result message dictionary
+            q.put({'type': self.QUEUE_MSG_RESULT, 'success': success, 'message': msg, 'root_name': created_root_name})
         except Exception as e:
-            q.put({'type': self.QUEUE_MSG_RESULT, 'success': False, 'message': f"Error in thread: {e}"})
+            # Ensure root_name is None on exception
+            q.put({'type': self.QUEUE_MSG_RESULT, 'success': False, 'message': f"Error in thread: {e}", 'root_name': None})
             print(f"--- Error in Scaffold Thread: {e} ---")
-            # import traceback; traceback.print_exc()
-
+            import traceback # Keep traceback for thread errors
+            traceback.print_exc()
 
     # --- Queue Checking Functions ---
 
@@ -1272,89 +1315,116 @@ class DirSnapApp(tk.Tk):
             self._update_status(f"UI Error during snapshot processing: {e}", is_error=True, tab=self.TAB_SNAPSHOT)
 
 
+# === Place inside DirSnapApp class in DirSnap/app.py ===
+
     def _check_scaffold_queue(self):
         """Checks queue for messages from scaffold thread and updates UI."""
         try:
-            while True: # Process all messages
+            while True: # Process all available messages in the queue
                 msg = self.scaffold_queue.get_nowait()
                 msg_type = msg.get('type')
 
                 if msg_type == self.QUEUE_MSG_PROGRESS:
                     # --- Handle Progress ---
                     current = msg.get('current', 0)
-                    total = msg.get('total', self.scaffold_progress_bar.cget('maximum'))
-                    try: # Protect against widget errors
-                         if total > 0:
-                              if self.scaffold_progress_bar['mode'] != 'determinate':
-                                   self.scaffold_progress_bar.stop(); self.scaffold_progress_bar['mode'] = 'determinate'
-                              self.scaffold_progress_bar['maximum'] = total
-                              self.scaffold_progress_bar['value'] = current
-                         else: # Fallback to indeterminate
-                              if self.scaffold_progress_bar['mode'] != 'indeterminate':
-                                   self.scaffold_progress_bar['mode'] = 'indeterminate'
-                                   if self.scaffold_progress_bar.winfo_ismapped(): self.scaffold_progress_bar.start()
-                    except tk.TclError: pass # Ignore if widget destroyed
+                    total = msg.get('total', 1) # Default total to 1 to avoid division by zero if needed
+                    # Update progress bar safely
+                    try:
+                         pb = self.scaffold_progress_bar
+                         if pb and pb.winfo_exists():
+                              # Ensure total is at least 1 for maximum
+                              pb_max = max(1, total)
+                              if pb['maximum'] != pb_max: pb['maximum'] = pb_max
+                              # Ensure mode is determinate if we have progress values
+                              if pb['mode'] != 'determinate':
+                                  pb.stop(); pb['mode'] = 'determinate'
+                              pb['value'] = current
+                    except (tk.TclError, AttributeError) as e:
+                         print(f"Warning: Error updating progress bar: {e}")
                     # --- End Handle Progress ---
 
                 elif msg_type == self.QUEUE_MSG_RESULT:
-                    success = msg['success']
-                    message = msg['message']
+                    success = msg.get('success', False)
+                    message = msg.get('message', 'Unknown result')
+                    created_root_name = msg.get('root_name') # Get the potentially None root name
 
                     # Update status first
                     self._update_status(message, is_error=not success, is_success=success, tab=self.TAB_SCAFFOLD)
-                    # Finalize common UI elements
+                    # Finalize common UI elements (button, progress bar)
                     self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
-                    # Handle specific success action
-                    if success:
-                        self._show_open_folder_button(message)
-                    return # Stop checking queue
+
+                    # Handle specific success action: Show button if successful and we got a name
+                    if success and created_root_name:
+                        self._show_open_folder_button(created_root_name) # Pass the actual name
+
+                    # Once result is processed, stop checking the queue for this task run
+                    return
 
         except queue.Empty:
+            # Queue is empty, check if the thread is still running
             thread_obj = getattr(self, 'scaffold_thread', None)
             if thread_obj and thread_obj.is_alive():
+                # Reschedule queue check
                 self.after(100, self._check_scaffold_queue)
-            else: # Thread finished unexpectedly or doesn't exist
-                # print("Warning: Scaffold thread finished but queue check found no result or thread missing.")
+            else:
+                # Thread finished, but no result message found? Finalize UI just in case.
+                # print("Warning: Scaffold thread finished but queue check found no result or thread missing.") # Optional debug
                 self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
 
         except Exception as e:
+            # Catch any other unexpected errors during queue processing
             print(f"ERROR: Exception in _check_scaffold_queue: {e}")
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             self._finalize_task_ui(self.scaffold_create_button, self.scaffold_progress_bar)
-            self._update_status(f"UI Error during processing: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
+            self._update_status(f"UI Error during scaffold processing: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
 
+# === Place inside DirSnapApp class in DirSnap/app.py ===
 
-    def _show_open_folder_button(self, success_message):
-         """Determines path from success message and shows button if valid."""
+    def _show_open_folder_button(self, created_root_name):
+         """
+         Shows the 'Open Output Folder' button if the specified path exists.
+         Uses the actual created root name passed from the backend logic.
+         """
          try:
               base_dir = self.scaffold_base_dir_var.get()
-              map_text = self.scaffold_map_input.get('1.0', tk.END).strip()
-              if not base_dir or not map_text: return
+              # Check if we received necessary info
+              if not base_dir or not created_root_name:
+                  print("Warning: Cannot show open folder button - missing base dir or created root name.")
+                  self.last_scaffold_path = None # Ensure path is None
+                  # Make sure button is hidden if it was previously visible
+                  if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
+                      self.scaffold_open_folder_button.grid_remove()
+                  return
 
-              created_root_name = map_text.splitlines()[0].strip().rstrip('/')
-              safe_root_name = re.sub(r'[<>:"/\\|?*]', '_', created_root_name)
-              if not safe_root_name: safe_root_name = "_sanitized_empty_name_"
-
-              if created_root_name:
-                   full_path = Path(base_dir) / safe_root_name
-                   if full_path.is_dir():
-                       self.last_scaffold_path = full_path
-                       # Check button still exists before gridding
-                       if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
-                            self.scaffold_open_folder_button.grid()
-                   else:
-                       print(f"Warning: Scaffold reported success, but path not found: {full_path}")
-                       self._update_status(f"{success_message} (Warning: Output path check failed!)", is_success=True, tab=self.TAB_SCAFFOLD)
+              # Construct the full path using the provided (already sanitized) root name
+              full_path = Path(base_dir) / created_root_name
+              if full_path.is_dir():
+                  # Path exists, store it and show the button
+                  self.last_scaffold_path = full_path
+                  if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
+                       self.scaffold_open_folder_button.grid() # Use grid to show it
               else:
-                   print("Warning: Could not determine created root folder name from map.")
-                   self._update_status(f"{success_message} (Warning: Couldn't determine output root name)", is_success=True, tab=self.TAB_SCAFFOLD)
+                   # Path doesn't exist - this indicates an internal issue if success was reported
+                   print(f"Internal Warning: Scaffold reported success, but final path check failed for: {full_path}")
+                   self._update_status(f"Structure created (Warning: Output path check failed!)", is_success=True, tab=self.TAB_SCAFFOLD)
+                   self.last_scaffold_path = None # Ensure path is None
+                   # Make sure button is hidden
+                   if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
+                       self.scaffold_open_folder_button.grid_remove()
 
-         except tk.TclError: pass # Widget destroyed
-         except Exception as e:
-              print(f"Warning: Error processing success state for open button: {e}")
-              self._update_status(f"{success_message} (Info: Could not enable 'Open Folder' button)", is_success=True, tab=self.TAB_SCAFFOLD)
+         except tk.TclError:
+              # Handle cases where the widget might have been destroyed
+              print("Info: TclError likely means scaffold tab widget destroyed during _show_open_folder_button.")
               self.last_scaffold_path = None
-
+              pass
+         except Exception as e:
+              print(f"Warning: Error checking/showing open folder button: {e}")
+              self._update_status(f"Structure created (Info: Could not enable 'Open Folder' button)", is_success=True, tab=self.TAB_SCAFFOLD)
+              self.last_scaffold_path = None # Ensure path is None on error
+              # Make sure button is hidden
+              if hasattr(self, 'scaffold_open_folder_button') and self.scaffold_open_folder_button.winfo_exists():
+                  self.scaffold_open_folder_button.grid_remove()
 
     def _open_last_scaffold_folder(self):
         """Opens the last successfully created scaffold output folder."""
@@ -1391,7 +1461,7 @@ class DirSnapApp(tk.Tk):
             messagebox.showerror("Error opening folder", err_msg)
             self._update_status(f"Error opening folder: {e}", is_error=True, tab=self.TAB_SCAFFOLD)
 
-# filename: dirmapper/app.py
+# filename: dirsnap/app.py
     # ... (other methods) ...
 
     # --- Help Menu Methods ---
@@ -1413,7 +1483,7 @@ class DirSnapApp(tk.Tk):
             # Assume README.md is in the parent directory of the script's location
             # This might need adjustment depending on packaging/installation structure
             script_dir = Path(__file__).parent
-            readme_path = script_dir.parent / "README.md" # Go up one level from dirmapper/
+            readme_path = script_dir.parent / "README.md" # Go up one level from dirsnap/
 
             if not readme_path.is_file():
                  # Try finding it in the current working directory as a fallback
@@ -1455,7 +1525,7 @@ class DirSnapApp(tk.Tk):
 if __name__ == '__main__':
     print("Running app.py directly for UI testing...")
     # Example: Test snapshot mode by default
-    # app = DirMapperApp()
+    # app = DirSnapApp()
 
     # Example: Test scaffold_here mode
     test_scaffold_path = str(Path('./_ui_test_scaffold_here').resolve())

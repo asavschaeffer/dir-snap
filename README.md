@@ -6,20 +6,21 @@ A simple Python desktop utility (using Tkinter) designed to assist users, partic
 
 This tool has two main functions:
 
-1.  **Snapshot (Directory -> Map):** Scans an existing directory on your filesystem and generates a text-based map representing its structure (folders and files), suitable for copying. Includes options for ignoring specific files/directories. (Currently outputs one format, more planned).
-2.  **Scaffold (Map -> Directory):** Parses an indented text map and creates the corresponding nested directory structure and empty files within a user-selected base directory on the filesystem. Includes support for multiple common map formats via auto-detection or manual selection.
+1. **Snapshot (Directory \-\> Map):** Scans an existing directory on your filesystem and generates a text-based map representing its structure (folders and files), suitable for copying. Includes options for output format (Standard Indent, Tabs, Tree), ignoring specific files/directories, and optionally including file/folder emojis.
+2. **Scaffold (Map \-\> Directory):** Parses an indented text map (in various common formats) and creates the corresponding nested directory structure and empty files within a user-selected base directory on the filesystem.
 
-## **Current Status (Functional MVP + QoL + Config)**
+## **Current Status (v3.1 \- Core Functionality Complete)**
 
-The core functionality is complete and working. Key Quality-of-Life features and configuration persistence have been added. The next steps involve adding more snapshot flexibility and preparing for distribution.
+The core snapshot and scaffold features are complete and working reliably across multiple formats (Standard Indent, Tabs, Tree). Key Quality-of-Life features (interactive exclusion, config persistence, context menu handling) are implemented. The next steps focus on minor enhancements and distribution preparation.
 
-## Features Implemented
+## **Features Implemented**
 
 - **Snapshot:**
-  - Generates a directory map using 2-space indentation.
-  - Adds a trailing `/` to directory names in the map.
-  - Includes built-in default ignore patterns (e.g., .git, node_modules, **pycache**).
-  - **NEW:** Loads additional user-defined default ignores from configuration file.
+  - Generates directory maps in multiple formats: Standard Indent (2-space), Tabs, or Tree.
+  - Option to include leading emojis (📁/📄) in the map output.
+  - Adds a trailing / to directory names in the map.
+  - Includes built-in default ignore patterns (e.g., .git, node_modules, \_\_pycache\_\_).
+  - Loads additional user-defined default ignores from configuration file (config.json).
   - Allows adding custom ignore patterns (comma-separated) per run via GUI.
   - Runs map generation in a background thread to keep UI responsive.
   - Displays an indeterminate progress bar during map generation.
@@ -52,15 +53,15 @@ The core functionality is complete and working. Key Quality-of-Life features and
   - Tooltips for key controls.
   - Status bars use color coding (Red/Green/Default).
   - Progress bars provide visual feedback for long operations.
-  - **NEW:** Standard Menu Bar (File -> Exit, Edit -> Preferences..., Help -> View README/About).
+  - Standard Menu Bar (File \-\> Exit, Edit \-\> Preferences..., Help \-\> View README/About).
 - **Configuration:**
-  - **NEW:** Settings (last used paths, format preference, auto-copy state, user default ignores) are saved to `config.json` in the user's standard configuration directory on exit.
-  - **NEW:** Settings are loaded on application startup.
-  - **NEW:** Configuration file can be opened via "Edit -> Preferences..." menu.
+  - Settings (last used paths, format preferences, auto-copy state, user default ignores) are saved to config.json in the user's standard configuration directory on exit.
+  - Settings are loaded on application startup.
+  - Configuration file can be opened via "Edit \-\> Preferences..." menu.
 - **Context Handling:**
   - Can be launched with a directory path (starts Snapshot mode).
   - Can be launched with a file path (starts Scaffold mode, loads file).
-  - Can be launched targeting a base directory for scaffolding ("Create Here" workflow - requires context menu setup).
+  - Can be launched targeting a base directory for scaffolding ("Create Here" workflow \- requires context menu setup).
 
 ## **Requirements**
 
@@ -68,51 +69,47 @@ The core functionality is complete and working. Key Quality-of-Life features and
 - tkinter / ttk (usually included with Python standard library)
 - pyperclip (for clipboard access)
 
-## **How to Run (from Source - Current State)**
+## **How to Run (from Source)**
 
-1.  Clone the repository:
-    `git clone` \<https://github.com/asavschaeffer/dir-snap>  
-    `cd DirSnap` # Or your project folder name
-
-2.  (Optional but recommended) Create and activate a virtual environment:
-    `python -m venv venv`
-    `# Windows`
-    `.\venv\Scripts\activate`
-    `# macOS/Linux`
-    `source venv/bin/activate`
-
-3.  Install dependencies:
-    `pip install -r requirements.txt`
-
-4.  Run the application:
-    `python main.py`
-
-    - You can also test the core logic directly (without GUI) using the test harness within logic.py: `python -m DirSnap.logic`
+1. Clone the repository:  
+   git clone https://github.com/asavschaeffer/dir-snap  
+   cd DirSnap \# Or your project folder name
+2. (Optional but recommended) Create and activate a virtual environment:  
+   python \-m venv venv  
+   \# Windows  
+   .\\venv\\Scripts\\activate  
+   \# macOS/Linux  
+   source venv/bin/activate
+3. Install dependencies:  
+   pip install \-r requirements.txt
+4. Run the application:  
+   python main.py
+   - You can also test the core logic directly (without GUI) using the test harness within logic.py: python \-m DirSnap.logic
 
 ## **Development Plan / To-Do List**
 
 - **Completed / Mostly Done:**
-  - ~~Core MVP Logic (Snapshot one format, Scaffold multiple formats).~~
-  - ~~GUI Structure & Basic Functionality.~~
-  - ~~Context Handling (Launch Arguments).~~
-  - ~~QoL: Status Bars + Colors.~~
-  - ~~QoL: Default Ignores Label.~~
-  - ~~QoL: Clear Buttons (Styled).~~
-  - ~~QoL: Open Output Folder Button.~~
-  - ~~QoL: Tooltips.~~
-  - ~~Scaffold Parsers: Spaces(2/4), Tabs, Tree, Generic Fallback (Implemented).~~
-  - ~~Multi-format Scaffold Parsing Structure (Orchestrator, Detector, Helpers).~~
-  - ~~Interactive exclusion (strikethrough) for Snapshot & Scaffold.~~
-  - ~~Cascading exclusion logic (visual & functional).~~
-  - ~~Background threading for Snapshot & Scaffold operations.~~
-  - ~~Progress bars (indeterminate & determinate) for background tasks.~~
-  - ~~Significant code refactoring.~~
-  - ~~Configuration File: Saving/loading settings (ignores, paths, prefs) to persistent file.~~
-  - ~~Help Menu: Basic About dialog and link to README.~~
+  - \~\~Core MVP Logic (Snapshot multiple formats, Scaffold multiple formats).\~\~
+  - \~\~GUI Structure & Basic Functionality.\~\~
+  - \~\~Context Handling (Launch Arguments).\~\~
+  - \~\~QoL: Status Bars \+ Colors.\~\~
+  - \~\~QoL: Default Ignores Label.\~\~
+  - \~\~QoL: Clear Buttons (Styled).\~\~
+  - \~\~QoL: Open Output Folder Button.\~\~
+  - \~\~QoL: Tooltips.\~\~
+  - \~\~Scaffold Parsers: Spaces(2/4), Tabs, Tree, Generic Fallback (Implemented & Fixed).\~\~
+  - \~\~Multi-format Scaffold Parsing Structure (Orchestrator, Detector, Helpers).\~\~
+  - \~\~Interactive exclusion (strikethrough) for Snapshot & Scaffold.\~\~
+  - \~\~Cascading exclusion logic (visual & functional).\~\~
+  - \~\~Background threading for Snapshot & Scaffold operations.\~\~
+  - \~\~Progress bars (indeterminate & determinate) for background tasks.\~\~
+  - \~\~Significant code refactoring.\~\~
+  - \~\~Configuration File: Saving/loading settings (ignores, paths, prefs) to persistent file.\~\~
+  - \~\~Help Menu: Basic About dialog and link to README.\~\~
 - **Up Next (High Priority):**
-  - **Snapshot Output Formats & Emojis:** Add "Output Format" selector (Tree, Tabs, etc.) and "[ ] Show Emojis" checkbox to Snapshot tab; implement corresponding logic in `create_directory_snapshot`. Add preferences to config.
+  - **Config Persistence for Snapshot Options:** Save/Load the selected Snapshot Output Format and Emoji preference in config.json.
 - **Essential for Deployment:**
-  - **Distribution Prep (Packaging, Installer, Right-Click Setup):** Package using PyInstaller --onedir, create an installer (e.g., Inno Setup), finalize and test right-click setup scripts/instructions.
+  - **Distribution Prep (Packaging, Installer, Right-Click Setup):** Package using PyInstaller \--onedir, create an installer (e.g., Inno Setup), finalize and test right-click setup scripts/instructions.
 - **Polish (Low Priority):**
   - **Further UI/UX Refinements:** Minor layout/theme adjustments, improved error dialogs.
   - Refine "Open Folder" logic (error handling, platform edge cases).
@@ -120,7 +117,7 @@ The core functionality is complete and working. Key Quality-of-Life features and
 - **Future / Deferred Ideas:**
   - Browser Extension Integration.
   - Drag and Drop support for files/folders onto the UI.
-  - Advanced Config (Sounds, UI Themes, In-App Settings Editor).
+  - Advanced Config (Sounds, UI Themes, In-App Settings Editor, Customizable Emojis).
 
 ## **License**
 

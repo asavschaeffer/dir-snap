@@ -1,4 +1,4 @@
-# filename: dirmapper/utils.py
+# filename: dirSnap/utils.py
 """ utils.py: Contains helper functions or constants that might be shared across modules. """
 import sys
 import os
@@ -7,7 +7,7 @@ from pathlib import Path
 # --- Constants ---
 # (Keep existing constants like DEFAULT_IGNORE_PATTERNS if they were moved here,
 # otherwise define application name)
-APP_NAME = "DirMapper"
+APP_NAME = "DirSnap"
 CONFIG_FILENAME = "config.json"
 
 # --- Configuration File Helper ---
@@ -65,11 +65,3 @@ def get_config_path() -> Path:
             pass # Allow returning the path even if creation failed
 
     return config_dir / CONFIG_FILENAME
-
-
-# --- Example Usage (Optional - for testing utils.py directly) ---
-if __name__ == '__main__':
-    print("--- Testing Utility Functions ---")
-    config_path = get_config_path()
-    print(f"Determined config file path: {config_path}")
-    print(f"Config directory exists: {config_path.parent.exists()}")
