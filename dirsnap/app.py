@@ -12,11 +12,8 @@ import re # Import re for scaffold exclusion logic
 import subprocess
 import threading
 import queue
-# Removed fnmatch, shutil, time as they seem unused directly in app.py
-# Keeping for logic import:
 import fnmatch
-import shutil
-import time
+import ctypes
 
 # --- Consolidated Import Logic for logic and utils ---
 try:
@@ -83,6 +80,21 @@ except ImportError:
 # --- Application Constants ---
 APP_VERSION = "3.2.1" # Incremented version
 
+# --- Helper function to find resources (like icons) ---
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+        #print(f"Accessing resource via _MEIPASS: {base_path}") # Optional debug print
+    except Exception:
+        # _MEIPASS not set, running from source code
+        # Icon is at project root, one level up from app.py
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+    return os.path.join(base_path, relative_path)
+
 # --- Tooltip Helper Class ---
 class Tooltip:
     """
@@ -140,6 +152,22 @@ class DirSnapApp(tk.Tk):
 
     def __init__(self, initial_path=None, initial_mode='snapshot'):
         super().__init__()
+
+        # --- Set AppUserModelID (for Windows Taskbar Icon) ---
+        if sys.platform == "win32": # Only run this on Windows
+            try:
+                # Make sure this ID is unique to your application
+                myappid = 'YourName.DirSnap.DirSnapApp.1' # Example unique ID
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+                print(f"Info: Set AppUserModelID to {myappid}") # Debug print
+            except Exception as e:
+                print(f"Warning: Could not set AppUserModelID: {e}")
+
+        try:
+            icon_path = resource_path('dirsnap.ico') # Use the helper function
+            self.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Warning: Could not set window icon: {e}")
 
         # --- Initialize attributes ---
         self.user_default_ignores = []

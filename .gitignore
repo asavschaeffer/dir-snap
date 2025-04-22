@@ -24,6 +24,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+releases/
 
 # PyInstaller
 # Usually ignored by distributable builds, but keep them out of source code
