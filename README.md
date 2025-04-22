@@ -17,7 +17,7 @@ The core snapshot and scaffold features are complete and working reliably across
 
 - **Snapshot:**
   - Generates directory maps in multiple formats: Standard Indent (2-space), Tabs, or Tree.
-  - Option to include leading emojis (📁/📄) in the map output.
+  - Option to include leading emojis (📁,📄,🐍,🖼️,🎬,📦,💾⚙️) in the map output.
   - Adds a trailing / to directory names in the map.
   - Includes built-in default ignore patterns (e.g., .git, node_modules, \_\_pycache\_\_).
   - Loads additional user-defined default ignores from configuration file (config.json).
@@ -104,10 +104,9 @@ The core snapshot and scaffold features are complete and working reliably across
   - \~\~Background threading for Snapshot & Scaffold operations.\~\~
   - \~\~Progress bars (indeterminate & determinate) for background tasks.\~\~
   - \~\~Significant code refactoring.\~\~
-  - \~\~Configuration File: Saving/loading settings (ignores, paths, prefs) to persistent file.\~\~
+  - \~\~Configuration File: Saving/loading settings (ignores, paths, prefs, output) to persistent file.\~\~
   - \~\~Help Menu: Basic About dialog and link to README.\~\~
 - **Up Next (High Priority):**
-  - **Config Persistence for Snapshot Options:** Save/Load the selected Snapshot Output Format and Emoji preference in config.json.
 - **Essential for Deployment:**
   - **Distribution Prep (Packaging, Installer, Right-Click Setup):** Package using PyInstaller \--onedir, create an installer (e.g., Inno Setup), finalize and test right-click setup scripts/instructions.
 - **Polish (Low Priority):**

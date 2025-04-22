@@ -196,7 +196,9 @@ class DirSnapApp(tk.Tk):
                   )
 
 # --- Configuration Methods ---
+# filename: dirsnap/app.py
 
+# --- Start of _load_config method ---
     def _load_config(self):
             """Loads settings from the configuration file."""
             config_path = get_config_path()
@@ -238,9 +240,9 @@ class DirSnapApp(tk.Tk):
                 self.snapshot_dir_var.set(last_source)
 
             self.snapshot_auto_copy_var.set(snapshot_conf.get("auto_copy", False))
-            # Optional: Load last session's custom ignores
-            # last_custom_ignores = snapshot_conf.get("last_custom_ignores", "")
-            # self.snapshot_ignore_var.set(last_custom_ignores) # Uncomment if desired
+            # Load snapshot format and emoji settings
+            self.snapshot_format_var.set(snapshot_conf.get("output_format", "Standard Indent"))
+            self.snapshot_show_emojis_var.set(snapshot_conf.get("show_emojis", False))
 
             # Scaffold Settings
             scaffold_conf = config_data.get("scaffold", {})
@@ -260,9 +262,10 @@ class DirSnapApp(tk.Tk):
                 self.user_default_ignores = [] # Reset to default empty list
 
             print(f"Info: Configuration loaded successfully from {config_path}")
-            # Optional: Update the snapshot default ignores label/tooltip here if desired
-            # self._update_snapshot_ignores_display() # Example call to a new method
+# --- End of _load_config method ---
 
+
+# --- Start of _save_config method ---
     def _save_config(self):
         """Saves current settings to the configuration file."""
         config_path = get_config_path()
@@ -275,52 +278,58 @@ class DirSnapApp(tk.Tk):
             "window": {},
             "snapshot": {},
             "scaffold": {},
-            "user_default_ignores": self.user_default_ignores # Assumes this list is managed somehow
+            "user_default_ignores": self.user_default_ignores
         }
 
         # Get Window Geometry
         try:
-             # Parse geometry string like "600x500+100+100"
              geo_string = self.geometry()
              parts = geo_string.split('+')
              size_parts = parts[0].split('x')
              settings["window"]["width"] = int(size_parts[0])
              settings["window"]["height"] = int(size_parts[1])
-             # Check if position is included
              if len(parts) == 3:
                   settings["window"]["x_pos"] = int(parts[1])
                   settings["window"]["y_pos"] = int(parts[2])
-             else: # Handle case where window might be unmapped or position unavailable
-                 settings["window"]["x_pos"] = None # Or store previous valid position
+             else:
+                 settings["window"]["x_pos"] = None
                  settings["window"]["y_pos"] = None
         except (tk.TclError, ValueError, IndexError) as e:
              print(f"Warning: Could not get or parse window geometry: {e}. Size/position not saved.")
-             # Use potentially loaded values or defaults if parsing fails
-             settings["window"] = self._load_config().get("window", {"width": 550, "height": 450}) # Example fallback
+             # Attempt to load previous window config to avoid losing it on error
+             try:
+                 # Check if config_path exists before trying to read
+                 if config_path.exists():
+                     with open(config_path, 'r', encoding='utf-8') as f:
+                         existing_config = json.load(f)
+                         settings["window"] = existing_config.get("window", {"width": 550, "height": 450, "x_pos": None, "y_pos": None})
+                 else: # If file doesn't exist, use defaults
+                     settings["window"] = {"width": 550, "height": 450, "x_pos": None, "y_pos": None}
+             except Exception as load_err: # Fallback if loading fails too
+                print(f"Warning: Could not load existing config to preserve window settings: {load_err}")
+                settings["window"] = {"width": 550, "height": 450, "x_pos": None, "y_pos": None}
 
 
         # Get Settings from UI Variables
         settings["snapshot"]["last_source_dir"] = self.snapshot_dir_var.get()
         settings["snapshot"]["auto_copy"] = self.snapshot_auto_copy_var.get()
-        # Optional: Save last session's custom ignores
-        # settings["snapshot"]["last_custom_ignores"] = self.snapshot_ignore_var.get()
+        # Save snapshot format and emoji settings
+        settings["snapshot"]["output_format"] = self.snapshot_format_var.get()
+        settings["snapshot"]["show_emojis"] = self.snapshot_show_emojis_var.get()
 
         settings["scaffold"]["last_base_dir"] = self.scaffold_base_dir_var.get()
         settings["scaffold"]["last_format"] = self.scaffold_format_var.get()
 
         # Write to file
         try:
-             # Ensure directory exists (get_config_path should have done this, but double-check)
              config_path.parent.mkdir(parents=True, exist_ok=True)
              with open(config_path, 'w', encoding='utf-8') as f:
-                  json.dump(settings, f, indent=4) # Use indent for readability
+                  json.dump(settings, f, indent=4)
              print(f"Info: Configuration saved successfully to {config_path}")
         except (OSError, TypeError) as e:
              print(f"Error: Failed to save config file '{config_path}': {e}")
-             # Optionally show a messagebox, but maybe annoying on close
-             # messagebox.showerror("Config Save Error",
-             #                     f"Could not save configuration file.\n\nError: {e}",
-             #                     parent=self)
+# --- End of _save_config method ---
+
 
     def _on_closing(self):
         """Handles window closing: saves config and exits."""
