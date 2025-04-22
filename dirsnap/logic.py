@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil # Used for test harness
 from typing import NamedTuple, Optional, Set, List, Tuple, Dict, Any # Added NamedTuple, Optional etc.
 import traceback # For detailed error reporting
+import sys
 
 # --- Default Configuration ---
 DEFAULT_IGNORE_PATTERNS = {
@@ -214,6 +215,8 @@ def _extract_line_components(line_text: str) -> LineComponents:
     )
 
 
+# filename: dirsnap/logic.py
+
 # ============================================================
 # --- Snapshot Function ---
 # ============================================================
@@ -221,7 +224,7 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                                output_format="Standard Indent", show_emojis=False):
     """
     Generates an indented text map of a directory structure, supporting different formats
-    and expanded emojis.
+    and expanded emojis. Includes the root directory name in the map.
     """
     root_dir = Path(root_dir_str).resolve()
     if not root_dir.is_dir():
@@ -265,9 +268,9 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
             current_path_for_error = current_path
             parent_node = node_map.get(current_path)
 
-            if parent_node is None: # Safety check, should not happen with topdown=True if map is built correctly
+            if parent_node is None: # Safety check
                 print(f"Warning: Parent node not found for path {current_path} during walk. Skipping children.")
-                dirs[:] = []; files[:] = []; continue # Skip processing children
+                dirs[:] = []; files[:] = []; continue
 
             # --- Pruning Directories (Modify dirs in-place) ---
             dirs_to_keep = []
@@ -275,7 +278,6 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                 is_ignored = False
                 dir_path_to_check = current_path / d
                 for pattern in ignore_set:
-                    # Check name only, name/, path only, path/
                     if (fnmatch.fnmatch(d, pattern) or
                         fnmatch.fnmatch(str(dir_path_to_check), pattern) or
                         (pattern.endswith(('/', '\\')) and fnmatch.fnmatch(d, pattern.rstrip('/\\'))) or
@@ -284,7 +286,7 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                         break
                 if not is_ignored:
                     dirs_to_keep.append(d)
-            dirs[:] = sorted(dirs_to_keep) # Modify dirs *in place* for os.walk pruning, and sort
+            dirs[:] = sorted(dirs_to_keep) # Modify dirs *in place* and sort
 
             # --- Filtering Files ---
             files_to_keep = []
@@ -292,7 +294,6 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                  is_ignored = False
                  file_path_to_check = current_path / f
                  for pattern in ignore_set:
-                      # Check name or full path against patterns
                       if fnmatch.fnmatch(f, pattern) or fnmatch.fnmatch(str(file_path_to_check), pattern):
                            is_ignored = True
                            break
@@ -305,13 +306,12 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                 dir_path = current_path / d_name
                 child_node = {'name': d_name, 'is_dir': True, 'children': [], 'path': dir_path}
                 parent_node['children'].append(child_node)
-                node_map[dir_path] = child_node # Add to map for descendant lookup
+                node_map[dir_path] = child_node
 
             for f_name in files: # Already sorted
                  file_path = current_path / f_name
-                 child_node = {'name': f_name, 'is_dir': False, 'path': file_path} # Files don't have 'children' key
+                 child_node = {'name': f_name, 'is_dir': False, 'path': file_path}
                  parent_node['children'].append(child_node)
-                 # Files don't need to be added to node_map as they have no children
 
         # --- Generate map string from the completed tree ---
         map_lines = []
@@ -324,72 +324,62 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
                 if node['is_dir']:
                     emoji_prefix = FOLDER_EMOJI + " "
                 else:
-                    # Get file extension
                     file_name = node.get('name', '')
-                    # Handle filenames with multiple dots (e.g., .tar.gz) - get last part
                     parts = file_name.split('.')
                     extension = parts[-1].lower() if len(parts) > 1 and parts[-1] else ''
-                    # Special case for common multi-part extensions
-                    if file_name.lower().endswith(".tar.gz"): extension = "gz" # Or handle as 'tar.gz'?
+                    if file_name.lower().endswith(".tar.gz"): extension = "gz"
                     elif file_name.lower().endswith(".tar.bz2"): extension = "bz2"
-
-                    # Look up emoji in the dictionary
                     file_emoji = FILE_TYPE_EMOJIS.get(extension, DEFAULT_FILE_EMOJI)
                     emoji_prefix = file_emoji + " "
             # --- END OF EMOJI LOGIC ---
 
             indent_str = ""
             current_prefix = ""
-            item_separator = "" # Placeholder if needed
+            item_separator = ""
 
             # Determine indentation and prefix based on format
             if output_format == "Tabs":
                 indent_str = "\t" * level
             elif output_format == "Tree":
-                # Only add structural prefix elements if level > 0
-                if level > 0:
-                    indent_str = prefix_str # Prefix carries the │ and spaces from parent levels
+                if level > 0: # Apply tree structure only from level 1 onwards
+                    indent_str = prefix_str
                     current_prefix = TREE_LAST_BRANCH if is_last else TREE_BRANCH
-                # else: root level items have no prefix or indent structure applied here
+                # Level 0 (root) gets no indent_str or current_prefix from tree logic
             else: # Default: "Standard Indent"
                 indent_str = " " * (level * DEFAULT_SNAPSHOT_SPACES)
 
             suffix = "/" if node['is_dir'] else ""
-            map_lines.append(f"{indent_str}{current_prefix}{item_separator}{emoji_prefix}{node['name']}{suffix}")
+            # Special case: Root node (level 0) name doesn't get the suffix automatically
+            # from os.walk, so add it if it's a directory.
+            if level == 0 and node['is_dir'] and not node['name'].endswith('/'):
+                name_to_display = node['name'] + '/'
+            else:
+                # For children or files, name is usually correct from os.walk or intermediate build
+                name_to_display = node['name'] + suffix
+
+
+            map_lines.append(f"{indent_str}{current_prefix}{item_separator}{emoji_prefix}{name_to_display.strip('/')}{suffix}") # Ensure suffix is added correctly
+
 
             # Recursively process children if it's a directory with children
-            if node.get('children'): # Check if 'children' key exists and list is not empty
+            if node.get('children'):
                  child_prefix_addition = ""
-                 if output_format == "Tree" and level >= 0: # Tree format needs prefix update
-                      # If current node is last, its children get space prefix segment, otherwise pipe segment
+                 # Determine prefix addition needed for Tree format children
+                 if output_format == "Tree":
                       child_prefix_addition = TREE_SPACE if is_last else TREE_PIPE
-                 # Pass the updated prefix string for the next level
-                 next_prefix_str = prefix_str + child_prefix_addition if output_format == "Tree" else ""
+                 next_prefix_str = prefix_str + child_prefix_addition
 
-                 # Sort children: folders first, then files, then alphabetically case-insensitive
                  sorted_children = sorted(node['children'], key=lambda x: (not x['is_dir'], x['name'].lower()))
                  num_children = len(sorted_children)
                  for i, child in enumerate(sorted_children):
                      child_is_last = (i == num_children - 1)
-                     # Recursive call for each child
+                     # Recursive call for each child, increasing level
                      build_map_lines_from_tree(child, level + 1, next_prefix_str, child_is_last)
 
         # --- Start the recursive generation process ---
-        # Decide whether to include the root directory name itself in the map
-        # Current behavior: Map starts with the *contents* of the root_dir
-
-        if tree.get('children'): # Check if root has children
-            root_children = sorted(tree.get('children', []), key=lambda x: (not x['is_dir'], x['name'].lower()))
-            num_root_children = len(root_children)
-            for i, child in enumerate(root_children):
-                 child_is_last = (i == num_root_children - 1)
-                 # Start first level items (children of root) at level 0, with no initial prefix_str
-                 build_map_lines_from_tree(child, 0, "", child_is_last)
-        else:
-            # Handle case where the root directory is empty or only contains ignored items
-            # Option: Return empty string, return root name only, return message?
-            # Current: Returns empty string if no children are processed.
-            pass
+        # Initiate the process by calling the helper function with the root node (tree) itself.
+        # The root node will be rendered at level 0. Its children will be level 1+.
+        build_map_lines_from_tree(tree, level=0, prefix_str="", is_last=True)
 
         return "\n".join(map_lines)
 
@@ -397,6 +387,7 @@ def create_directory_snapshot(root_dir_str, custom_ignore_patterns=None, user_de
         print(f"ERROR: Unhandled exception during directory snapshot near {current_path_for_error}: {e}")
         traceback.print_exc() # Print full traceback for debugging
         return f"Error during directory processing: {e}"
+
 
 # ============================================================
 # --- Scaffold Functions ---
@@ -1023,12 +1014,16 @@ if __name__ == '__main__':
         return results
 
 
+ # filename: dirsnap/logic.py
+
+# ... (within the if __name__ == '__main__': block) ...
+
     def run_scaffold_tests(snapshot_results):
-        """Runs scaffolding tests using generated snapshots."""
+        """Runs scaffolding tests using generated snapshots. Corrected base dir call."""
         global num_errors
         print("\n--- Running Scaffold Tests ---")
-        if not scaffold_base.exists():
-             print("ERROR: Scaffold base directory not found. Skipping scaffold tests.")
+        if not scaffold_base.is_dir(): # Check if scaffold_base itself exists
+             print(f"ERROR: Scaffold base directory '{scaffold_base}' not found or not a directory. Skipping scaffold tests.")
              num_errors += 1
              return
 
@@ -1040,33 +1035,51 @@ if __name__ == '__main__':
              print(f"ERROR: Cannot run scaffold test '{test_desc}', prerequisite snapshot failed or empty.")
              num_errors += 1
         else:
-            target_scaffold_dir = scaffold_base / "scaffold_tree_emojis"
-            msg, success, root_name = create_structure_from_map(map_input, str(target_scaffold_dir), format_hint="Tree")
+            # --- FIX IS HERE: Pass str(scaffold_base) ---
+            msg, success, root_name = create_structure_from_map(
+                map_input, str(scaffold_base), format_hint="Tree"
+            )
             print(f"Result: {success} - {msg}")
             if success and root_name:
                 print(f"Reported root name: {root_name}")
+                scaffold_output_root = scaffold_base / root_name # Path for verification
                 # Verification checks
-                if not (target_scaffold_dir / root_name).exists():
-                    print(f"ERROR: Scaffold success reported, but root '{root_name}' not found in {target_scaffold_dir}")
+                if not scaffold_output_root.is_dir(): # Check if it's a directory
+                    print(f"ERROR: Scaffold success reported, but root '{root_name}' not found or not a directory in {scaffold_base}")
                     num_errors += 1
-                if not (target_scaffold_dir / root_name / "main_script.py").exists():
-                    print(f"ERROR: Expected file 'main_script.py' not found in scaffolded structure.")
+                elif not (scaffold_output_root / "main_script.py").exists():
+                    print(f"ERROR: Expected file 'main_script.py' not found in {scaffold_output_root}.")
                     num_errors += 1
-                if not (target_scaffold_dir / root_name / "subdir1" / "nested_dir").is_dir():
-                    print(f"ERROR: Expected directory 'subdir1/nested_dir' not found.")
+                elif not (scaffold_output_root / "subdir1" / "nested_dir").is_dir():
+                    print(f"ERROR: Expected directory 'subdir1/nested_dir' not found in {scaffold_output_root}.")
                     num_errors += 1
-                if (target_scaffold_dir / root_name / "subdir2_ignored_by_custom").exists():
-                     print(f"ERROR: Ignored directory 'subdir2_ignored_by_custom' was created.")
-                     num_errors += 1
-                print("Basic verification passed.")
+                elif (scaffold_output_root / "subdir2_ignored_by_custom").exists():
+                     # This check depends on the specific snapshot used (Tree, Emojis, Custom Ignore)
+                     # Let's verify against the non-ignored snapshot first
+                     print(f"INFO: Checking if 'subdir2_ignored_by_custom' exists (it shouldn't if ignored).")
+                     # Re-run with the ignored snapshot to check absence
+                     ignored_map_input = snapshot_results.get("Tree, Emojis, Custom Ignore")
+                     if ignored_map_input and not ignored_map_input.startswith("Error:"):
+                         temp_scaffold_base_ignored = scaffold_base / "scaffold_ignored_subdir2"
+                         msg_i, success_i, root_name_i = create_structure_from_map(ignored_map_input, str(temp_scaffold_base_ignored), format_hint="Tree")
+                         if success_i and root_name_i:
+                             if (temp_scaffold_base_ignored / root_name_i / "subdir2_ignored_by_custom").exists():
+                                 print(f"ERROR: Ignored directory 'subdir2_ignored_by_custom' WAS created when using ignored map.")
+                                 num_errors += 1
+                             else:
+                                 print(f"Verified: 'subdir2_ignored_by_custom' was NOT created when using ignored map.")
+                         else:
+                             print(f"Warning: Could not verify ignore for subdir2 - scaffold failed: {msg_i}")
+
+                else:
+                     print("Basic verification passed for non-ignored structure.")
             elif success:
                  print(f"ERROR: Scaffold success reported, but no root name returned.")
                  num_errors += 1
             else:
-                 print(f"Scaffold failed as expected OR unexpectedly: {msg}")
-                 # Increment error count only if the corresponding snapshot didn't fail
+                 print(f"Scaffold failed: {msg}")
                  if not snapshot_results.get("Tree, With Emojis", "").startswith("Error:"):
-                     num_errors += 1 # Failure was unexpected
+                     num_errors += 1
 
         # --- Test Case 2: Scaffold from Standard Indent ---
         test_desc = "Scaffold from Standard Indent"
@@ -1076,13 +1089,16 @@ if __name__ == '__main__':
             print(f"ERROR: Cannot run scaffold test '{test_desc}', prerequisite snapshot failed or empty.")
             num_errors += 1
         else:
-            target_scaffold_dir = scaffold_base / "scaffold_standard"
-            msg, success, root_name = create_structure_from_map(map_input, str(target_scaffold_dir), format_hint="Spaces (2)")
+            # --- FIX IS HERE: Pass str(scaffold_base) ---
+            msg, success, root_name = create_structure_from_map(
+                map_input, str(scaffold_base), format_hint="Spaces (2)"
+            )
             print(f"Result: {success} - {msg}")
             if success and root_name:
                  print(f"Reported root name: {root_name}")
-                 if not (target_scaffold_dir / root_name / "main_script.py").exists():
-                     print(f"ERROR: Expected file 'main_script.py' not found.")
+                 scaffold_output_root = scaffold_base / root_name # Path for verification
+                 if not (scaffold_output_root / "main_script.py").exists():
+                     print(f"ERROR: Expected file 'main_script.py' not found in {scaffold_output_root}.")
                      num_errors += 1
                  else: print("Basic verification passed.")
             else:
@@ -1093,46 +1109,67 @@ if __name__ == '__main__':
         # --- Test Case 3: Scaffold with Exclusions ---
         test_desc = "Scaffold from Tree with Exclusions"
         print(f"\nTesting: {test_desc}")
+        # Use the non-ignored tree map as input
         map_input = snapshot_results.get("Tree, With Emojis")
         if not map_input or map_input.startswith("Error:"):
              print(f"ERROR: Cannot run scaffold test '{test_desc}', prerequisite snapshot failed or empty.")
              num_errors += 1
         else:
-            target_scaffold_dir = scaffold_base / "scaffold_exclusions"
-            # Find line numbers to exclude (e.g., exclude subdir1 and data.json)
             lines = map_input.splitlines()
             excluded_lines = set()
             line_num_subdir1 = -1
-            for i, line in enumerate(lines, 1):
-                if "subdir1/" in line: excluded_lines.add(i); line_num_subdir1 = i
-                if "data.json" in line: excluded_lines.add(i)
-            # Add children of subdir1 if found
-            if line_num_subdir1 != -1:
-                 indent_subdir1 = lines[line_num_subdir1-1].find("subdir1")
-                 for i in range(line_num_subdir1, len(lines)):
-                      line_num = i + 1
-                      current_indent = len(lines[i]) - len(lines[i].lstrip())
-                      # Rough check: exclude lines more indented immediately following subdir1
-                      if lines[i].strip() and current_indent > indent_subdir1:
-                           excluded_lines.add(line_num)
-                      elif lines[i].strip() and current_indent <= indent_subdir1:
-                           break # Stop when indentation returns to same level or less
+            indent_subdir1 = -1
 
-            print(f"Excluding lines: {excluded_lines}")
+            # Find line for subdir1 and its indent more carefully
+            for i, line in enumerate(lines, 1):
+                # Match pattern like "├── 📁 subdir1/" or "└── 📁 subdir1/" or just "📁 subdir1/" (level 0 unlikely here)
+                match = re.search(r'(?:[├└]──\s+)?(?:📁\s+)?(subdir1/)', line)
+                if match:
+                    excluded_lines.add(i)
+                    line_num_subdir1 = i
+                    indent_subdir1 = line.find(match.group(1)) # Indent of the name itself
+                    break
+
+            # Exclude children of subdir1 if found
+            if line_num_subdir1 != -1 and indent_subdir1 != -1:
+                 for i in range(line_num_subdir1, len(lines)): # Start from line *after* subdir1
+                      line_num = i + 1
+                      line = lines[i]
+                      if line.strip():
+                          current_indent = len(line) - len(line.lstrip())
+                          # Exclude if more indented than subdir1's name indent
+                          if current_indent >= indent_subdir1 + 1: # Need >= indent + some spaces/prefix
+                               # A more robust check might parse the level using tree logic
+                               excluded_lines.add(line_num)
+                          # Stop if indentation returns to same level or less
+                          elif current_indent < indent_subdir1:
+                               break
+                      else: break # Stop at empty line
+
+            # Also exclude the specific file data.json
+            for i, line in enumerate(lines, 1):
+                 match_json = re.search(r'(?:[├└]──\s+)?(?:⚙️\s+)?(data\.json)', line)
+                 if match_json:
+                    excluded_lines.add(i)
+                    break
+
+            print(f"Excluding lines: {sorted(list(excluded_lines))}")
+            # --- FIX IS HERE: Pass str(scaffold_base) ---
             msg, success, root_name = create_structure_from_map(
-                map_input, str(target_scaffold_dir), format_hint="Tree", excluded_lines=excluded_lines
+                map_input, str(scaffold_base), format_hint="Tree", excluded_lines=excluded_lines
             )
             print(f"Result: {success} - {msg}")
             if success and root_name:
                  print(f"Reported root name: {root_name}")
-                 if (target_scaffold_dir / root_name / "subdir1").exists():
-                     print(f"ERROR: Excluded directory 'subdir1' was created.")
+                 scaffold_output_root = scaffold_base / root_name # Path for verification
+                 if (scaffold_output_root / "subdir1").exists():
+                     print(f"ERROR: Excluded directory 'subdir1' was created in {scaffold_output_root}.")
                      num_errors += 1
-                 if (target_scaffold_dir / root_name / "data.json").exists():
-                      print(f"ERROR: Excluded file 'data.json' was created.")
+                 if (scaffold_output_root / "data.json").exists():
+                      print(f"ERROR: Excluded file 'data.json' was created in {scaffold_output_root}.")
                       num_errors += 1
-                 if not (target_scaffold_dir / root_name / "main_script.py").exists():
-                      print(f"ERROR: Expected file 'main_script.py' was NOT created.")
+                 if not (scaffold_output_root / "main_script.py").exists():
+                      print(f"ERROR: Expected file 'main_script.py' was NOT created in {scaffold_output_root}.")
                       num_errors += 1
                  else: print("Exclusion verification passed.")
             else:
@@ -1144,8 +1181,10 @@ if __name__ == '__main__':
         test_desc = "Scaffold with Invalid Map"
         print(f"\nTesting: {test_desc}")
         invalid_map = "root/\n- file1.txt\n - file2.txt" # Inconsistent indent/prefix
-        target_scaffold_dir = scaffold_base / "scaffold_invalid"
-        msg, success, root_name = create_structure_from_map(invalid_map, str(target_scaffold_dir), format_hint="Auto-Detect")
+        # --- FIX IS HERE: Pass str(scaffold_base) ---
+        msg, success, root_name = create_structure_from_map(
+            invalid_map, str(scaffold_base), format_hint="Auto-Detect"
+        )
         print(f"Result: {success} - {msg}")
         if success:
              print("ERROR: Scaffolding succeeded with an invalid map format!")
@@ -1153,6 +1192,7 @@ if __name__ == '__main__':
         else:
              print("Scaffold failed as expected for invalid map.")
 
+# ... (rest of the test harness: setup_test_env, cleanup_test_env, main execution) ...
 
     def cleanup_test_env():
         """Removes the test environment."""
